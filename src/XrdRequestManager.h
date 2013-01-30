@@ -37,6 +37,11 @@ public:
      */
     std::shared_ptr<XrdCl::File> getActiveFile();
 
+    /**
+     * Add the list of active connections to the exception extra info.
+     */
+    void addConnections(cms::Exception &);
+
 private:
     /**
      * Given a client request, split it into two requests lists.
@@ -69,11 +74,6 @@ private:
      * current file but avoiding servers which we already have connections to.
      */
     std::string prepareOpaqueString();
-
-    /**
-     * Add the list of active connections to the exception extra info.
-     */
-    void addConnections(cms::Exception &);
 
     std::vector<std::shared_ptr<Source> > m_activeSources;
     std::vector<std::shared_ptr<Source> > m_inactiveSources;

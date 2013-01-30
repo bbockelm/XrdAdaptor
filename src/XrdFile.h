@@ -61,7 +61,7 @@ private:
    * Returns a file handle from one of the active sources.
    * Verifies the file is open and throws an exception as necessary.
    */
-  XrdCl::File &         getActiveFile();
+  std::shared_ptr<XrdCl::File>   getActiveFile();
 
   std::unique_ptr<XrdAdaptor::RequestManager> m_requestmanager;
   IOOffset	 	         m_offset;

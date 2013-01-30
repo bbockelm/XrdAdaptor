@@ -130,10 +130,10 @@ XrdFile::open (const char *name,
   m_name = name;
 
   // Stat the file so we can keep track of the offset better.
-  XrdCl::File &file = getActiveFile();
+  auto file = getActiveFile();
   XrdCl::XRootDStatus status;
   XrdCl::StatInfo *statInfo = NULL;
-  if (! (status = file.Stat(true, statInfo)).IsOK()) {
+  if (! (status = file->Stat(true, statInfo)).IsOK()) {
     edm::Exception ex(edm::errors::FileOpenError);
     ex << "XrdCl::File::Stat(name='" << name
        << ") => error '" << status.ToString()
@@ -167,7 +167,7 @@ XrdFile::open (const char *name,
   m_requestmanager->getActiveSourceNames(sources);
   std::stringstream ss;
   ss << "Active sources: ";
-  for (auto it : sources)
+  for (auto const& it : sources)
     ss << it << ", ";
   edm::LogInfo("XrdFileInfo") << ss.str();
 }
@@ -213,10 +213,10 @@ XrdFile::read (void *into, IOSize n)
     addConnection(ex);
     throw ex;
   }
-  XrdCl::File & file = getActiveFile();
+  auto file = getActiveFile();
 
   uint32_t bytesRead;
-  XrdCl::XRootDStatus s = file.Read(m_offset, n, into, bytesRead);
+  XrdCl::XRootDStatus s = file->Read(m_offset, n, into, bytesRead);
   if (!s.IsOK()) {
     edm::Exception ex(edm::errors::FileReadError);
     ex << "XrdClient::Read(name='" << m_name
@@ -242,10 +242,10 @@ XrdFile::read (void *into, IOSize n, IOOffset pos)
     addConnection(ex);
     throw ex;
   }
-  XrdCl::File & file = getActiveFile();
+  auto file = getActiveFile();
 
   uint32_t bytesRead;
-  XrdCl::XRootDStatus s = file.Read(pos, n, into, bytesRead);
+  XrdCl::XRootDStatus s = file->Read(pos, n, into, bytesRead);
   if (!s.IsOK()) {
     edm::Exception ex(edm::errors::FileReadError);
     ex << "XrdClient::Read(name='" << m_name
@@ -281,7 +281,7 @@ XrdFile::readv (IOBuffer *into, IOSize n)
 IOSize
 XrdFile::readv (IOPosBuffer *into, IOSize n)
 {
-  XrdCl::File & file = getActiveFile();
+  auto file = getActiveFile();
   
   // A trivial vector read - unlikely, considering ROOT data format.
   if (unlikely(n == 0)) {
@@ -315,7 +315,7 @@ XrdFile::readv (IOPosBuffer *into, IOSize n)
     cl.push_back(ci);
   }
   XrdCl::VectorReadInfo *vr = nullptr;
-  XrdCl::XRootDStatus s = file.VectorRead(cl, nullptr, vr);
+  XrdCl::XRootDStatus s = file->VectorRead(cl, nullptr, vr);
   if (!s.IsOK()) {
     edm::Exception ex(edm::errors::FileReadError);
     ex << "XrdFile::readv(name='" << m_name
@@ -341,9 +341,9 @@ XrdFile::write (const void *from, IOSize n)
     addConnection(ex);
     throw ex;
   }
-  XrdCl::File & file = getActiveFile();
+  auto file = getActiveFile();
 
-  XrdCl::XRootDStatus s = file.Write(m_offset, n, from);
+  XrdCl::XRootDStatus s = file->Write(m_offset, n, from);
   if (!s.IsOK()) {
     cms::Exception ex("FileWriteError");
     ex << "XrdFile::write(name='" << m_name << "', n=" << n
@@ -372,9 +372,9 @@ XrdFile::write (const void *from, IOSize n, IOOffset pos)
     addConnection(ex);
     throw ex;
   }
-  XrdCl::File &file = getActiveFile();
+  auto file = getActiveFile();
 
-  XrdCl::XRootDStatus s = file.Write(pos, n, from);
+  XrdCl::XRootDStatus s = file->Write(pos, n, from);
   if (!s.IsOK()) {
     cms::Exception ex("FileWriteError");
     ex << "XrdFile::write(name='" << m_name << "', n=" << n
@@ -455,20 +455,27 @@ XrdFile::resize (IOOffset /* size */)
   throw ex;
 }
 
+std::shared_ptr<XrdCl::File>
+XrdFile::getActiveFile (void) 
+{ 
+  if (!m_requestmanager.get())
+  { 
+    cms::Exception ex("XrdFileLogicError");
+    ex << "Xrd::getActiveFile(name='" << m_name << "') no active request manager";
+    ex.addContext("Calling XrdFile::getActiveFile()");
+    m_requestmanager->addConnections(ex);
+    m_close = false;
+    throw ex;
+  }
+  return m_requestmanager->getActiveFile();
+}
+
 void
 XrdFile::addConnection (cms::Exception &ex)
 {
   if (m_requestmanager.get())
   {
-    std::vector<std::string> sources;
-    m_requestmanager->getActiveSourceNames(sources);
-    std::stringstream ss;
-    ss << "Active sources: ";
-    for (auto it : sources)
-    {
-      ss << "Active server connection: " << it;
-      ex.addAdditionalInfo(ss.str());
-    }
+    m_requestmanager->addConnections(ex);
   }
 }
 

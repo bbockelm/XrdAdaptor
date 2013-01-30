@@ -35,8 +35,14 @@ RequestManager::RequestManager(const std::string &filename, int flags, int perms
     throw ex;
   }
 
-  std::shared_ptr<Source> source(new Source(std::move(file)));
+  timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+
+  std::shared_ptr<Source> source(new Source(ts, std::move(file)));
   m_activeSources.push_back(source);
+
+  ts.tv_sec += 5;
+  nextActiveSourceCheck = ts;
 }
 
 RequestManager::~RequestManager()
@@ -45,7 +51,7 @@ RequestManager::~RequestManager()
 void
 RequestManager::checkSources(timespec &now, IOSize requestSize)
 {   
-  if (timeDiffMS(now, lastSourceCheck) > 1000)
+  if (timeDiffMS(now, lastSourceCheck) > 1000 && timeDiffMS(now, nextActiveSourceCheck) > 0)
   {   
     lastSourceCheck = now;
     checkSourcesImpl(now, requestSize);
@@ -53,10 +59,47 @@ RequestManager::checkSources(timespec &now, IOSize requestSize)
 }
 
 void
+RequestManager::checkSourcesImpl(timespec &now, IOSize requestSize)
+{
+  if (m_activeSources.size() > 1)
+  {
+    if ((m_activeSources[0]->getQuality() > 5130) || (m_activeSources[0]->getQuality()*4 < m_activeSources[1]->getQuality()))
+    {
+      // TODO: Evict source 0 and search for new source.
+    }
+    if ((m_activeSources[1]->getQuality() > 5130) || (m_activeSources[1]->getQuality()*4 < m_activeSources[0]->getQuality()))
+    {
+      // TODO: Evict source 1 and search for new source.
+    }
+  }
+
+  now.tv_sec += 5;
+  nextActiveSourceCheck = now;
+}
+
+std::shared_ptr<XrdCl::File>
+RequestManager::getActiveFile()
+{
+  return m_activeSources[0]->getFileHandle();
+}
+
+void
 RequestManager::getActiveSourceNames(std::vector<std::string> & sources)
 {
   sources.reserve(m_activeSources.size());
-  for (auto source : m_activeSources) {
+  for (auto const& source : m_activeSources) {
     sources.push_back(source->ID());
   }
 }
+
+void
+RequestManager::addConnections(cms::Exception &ex)
+{
+  std::vector<std::string> sources;
+  getActiveSourceNames(sources);
+  for (auto const& source : sources)
+  {
+    ex.addAdditionalInfo("Active source: " + source);
+  }
+}
+
