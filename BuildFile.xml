@@ -7,4 +7,4 @@
 <use   name="xrootd"/>
 <lib   name="XrdCl"/>
 <flags   CPPDEFINES="_FILE_OFFSET_BITS=64"/>
-<flags   CPPFLAGS="-I/home/cse496/bbockelm/projects/xrootd/src"/>
+<flags   CPPFLAGS="-I/home/cse496/bbockelm/projects/xrootd/src -I/home/cse496/bbockelm/software/tbb41_20121003oss/include"/>

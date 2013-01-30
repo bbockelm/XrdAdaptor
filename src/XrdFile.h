@@ -8,6 +8,10 @@
 # include <string>
 # include <memory>
 
+namespace XrdAdaptor {
+class RequestManager;
+}
+
 class XrdFile : public Storage
 {
 public:
@@ -53,7 +57,13 @@ private:
 
   void                  addConnection(cms::Exception &);
 
-  std::auto_ptr<XrdCl::File>     m_file;
+  /**
+   * Returns a file handle from one of the active sources.
+   * Verifies the file is open and throws an exception as necessary.
+   */
+  XrdCl::File &         getActiveFile();
+
+  std::unique_ptr<XrdAdaptor::RequestManager> m_requestmanager;
   IOOffset	 	         m_offset;
   IOOffset                       m_size;
   bool			         m_close;

@@ -1,0 +1,25 @@
+
+To install (assumes basic knowledge of CMSSW development):
+
+Checkout a compatible CMSSW release (I typically work from CMSSW_6_1_0).  Execute the following commandss:
+
+addpkg Utilities/XrdAdaptor
+cd src/Utilities/XrdAdaptor; rm -rf *
+git clone git://github.com/bbockelm/XrdAdaptor.git
+cd $OLDPWD
+ln -s $HOME/projects/xrootd-build/src/XrdCl/libXrdCl.so lib/slc5_amd64_gcc472/libXrdCl.so
+ln -s $HOME/projects/xrootd-build/src/XrdCl/libXrdCl.so.0 lib/slc5_amd64_gcc472/libXrdCl.so.0
+
+Adjust the above two links to point to a build of xrootd 3.3.0-rc2 or later.  Alternately, install the
+xrootd-cl-devel RPMs.
+
+You will also need to adjust the BuildFile.xml to reflect your xrootd header location.  Either edit:
+
+<flags   CPPFLAGS="-I/home/cse496/bbockelm/projects/xrootd/src"/>
+
+or have the development RPM installed.
+
+Enjoy!
+
+Brian
+

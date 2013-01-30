@@ -3,6 +3,12 @@
 
 #include <memory>
 
+#include "QualityMetric.h"
+
+namespace XrdCl {
+    class File;
+}
+
 namespace XrdAdaptor {
 
 class RequestList;
@@ -10,9 +16,11 @@ class RequestList;
 class Source {
 
 public:
-    Source(std::unique_ptr<XrdFile> fileHandle);
+    Source(std::unique_ptr<XrdCl::File> fileHandle);
 
     void handle(RequestList &);
+
+    std::shared_ptr<XrdCl::File> getFileHandle();
 
     const std::string & ID() const {return m_id;}
 
@@ -23,7 +31,7 @@ private:
 
     struct timespec m_lastDowngrade;
     std::string m_id;
-    std::unique_ptr<XrdFile> m_fh;
+    std::unique_ptr<XrdCl::File> m_fh;
 
     QualityMetric m_qm;
 
