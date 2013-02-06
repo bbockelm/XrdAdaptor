@@ -1,7 +1,11 @@
 #ifndef Utilities_XrdAdaptor_XrdRequestManager_h
 #define Utilities_XrdAdaptor_XrdRequestManager_h
 
+#include <sys/stat.h>
+
 #include <boost/utility.hpp>
+
+#include "XrdCl/XrdClFileSystem.hh"
 
 #include "XrdRequest.h"
 #include "XrdSource.h"
@@ -15,15 +19,20 @@ namespace XrdAdaptor {
 class RequestManager : boost::noncopyable {
 
 public:
-    RequestManager(const std::string & filename, int flags, int perms);
+    RequestManager(const std::string & filename, XrdCl::OpenFlags::Flags flags, XrdCl::Access::Mode perms);
 
     ~RequestManager();
 
     /**
      * Synchronous interface for handling a client request.
      */
-    IOSize handle(IOOffset off, IOSize size);
-    IOSize handle(ClientRequest);
+    IOSize handle(void * into, IOOffset off, IOSize size)
+    {
+        ClientRequest req(into, off, size);
+        return handle(req);
+    }
+
+    IOSize handle(ClientRequest &req);
 
     /**
      * Retrieve the names of the active sources
@@ -53,7 +62,7 @@ private:
      * If active is true, broadcast is made to all active sources.
      * Otherwise, broadcast is made to the inactive sources.
      */
-    void broadcastRequest(const Request &, bool active);
+    void broadcastRequest(const ClientRequest &, bool active);
 
     /**
      * Check our set of active sources.

@@ -6,5 +6,6 @@
 <use   name="FWCore/MessageLogger"/>
 <use   name="xrootd"/>
 <lib   name="XrdCl"/>
+<lib   name="XrdUtils"/>
 <flags   CPPDEFINES="_FILE_OFFSET_BITS=64"/>
-<flags   CPPFLAGS="-I/home/cse496/bbockelm/projects/xrootd/src -I/home/cse496/bbockelm/software/tbb41_20121003oss/include"/>
+<flags   CPPFLAGS="-g -I/home/cse496/bbockelm/projects/xrootd/src -I/home/cse496/bbockelm/software/tbb41_20121003oss/include"/>

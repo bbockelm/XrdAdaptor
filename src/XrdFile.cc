@@ -101,7 +101,7 @@ XrdFile::open (const char *name,
   }
 
   // Translate our flags to system flags
-  int openflags = 0;
+  XrdCl::OpenFlags::Flags openflags = XrdCl::OpenFlags::None;
 
   if (flags & IOFlags::OpenWrite)
     openflags |= XrdCl::OpenFlags::Update;
@@ -126,7 +126,19 @@ XrdFile::open (const char *name,
   if ((flags & IOFlags::OpenTruncate) && (flags & IOFlags::OpenWrite))
     openflags |= XrdCl::OpenFlags::Delete;
 
-  m_requestmanager.reset(new RequestManager(name, openflags, perms));
+  // Translate mode flags
+  XrdCl::Access::Mode modeflags = XrdCl::Access::None;
+  modeflags |= (perms & S_IRUSR) ? XrdCl::Access::UR : XrdCl::Access::None;
+  modeflags |= (perms & S_IWUSR) ? XrdCl::Access::UW : XrdCl::Access::None;
+  modeflags |= (perms & S_IXUSR) ? XrdCl::Access::UX : XrdCl::Access::None;
+  modeflags |= (perms & S_IRGRP) ? XrdCl::Access::GR : XrdCl::Access::None;
+  modeflags |= (perms & S_IWGRP) ? XrdCl::Access::GW : XrdCl::Access::None;
+  modeflags |= (perms & S_IXGRP) ? XrdCl::Access::GX : XrdCl::Access::None;
+  modeflags |= (perms & S_IROTH) ? XrdCl::Access::GR : XrdCl::Access::None;
+  modeflags |= (perms & S_IWOTH) ? XrdCl::Access::GW : XrdCl::Access::None;
+  modeflags |= (perms & S_IXOTH) ? XrdCl::Access::GX : XrdCl::Access::None;
+
+  m_requestmanager.reset(new RequestManager(name, openflags, modeflags));
   m_name = name;
 
   // Stat the file so we can keep track of the offset better.

@@ -15,6 +15,7 @@ namespace XrdCl {
 namespace XrdAdaptor {
 
 class RequestList;
+class ClientRequest;
 
 class Source : boost::noncopyable {
 
@@ -22,6 +23,8 @@ public:
     Source(timespec now, std::unique_ptr<XrdCl::File> fileHandle);
 
     ~Source();
+
+    void handle(ClientRequest &);
 
     void handle(RequestList &);
 

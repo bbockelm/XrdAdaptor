@@ -14,7 +14,7 @@ int timeDiffMS(timespec &a, timespec &b)
   return diff;
 }
 
-RequestManager::RequestManager(const std::string &filename, int flags, int perms)
+RequestManager::RequestManager(const std::string &filename, XrdCl::OpenFlags::Flags flags, XrdCl::Access::Mode perms)
 {
   m_name = filename;
   m_flags = flags;
@@ -103,3 +103,13 @@ RequestManager::addConnections(cms::Exception &ex)
   }
 }
 
+IOSize
+handle(void * into, IOOffset off, IOSize size)
+{
+
+  ClientRequest c(into, off, size, r);
+  m_activeSources[0]->handle(c);
+  c.fulfill();
+
+  std::shared_ptr<XRootDStatus> status = c.getStatus();
+}
