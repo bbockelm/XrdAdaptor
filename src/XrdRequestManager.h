@@ -26,7 +26,7 @@ public:
     /**
      * Synchronous interface for handling a client request.
      */
-    IOSize handle(void * into, IOOffset off, IOSize size)
+    IOSize handle(void * into, IOSize, IOOffset off)
     {
         ClientRequest req(into, off, size);
         return handle(req);
@@ -87,8 +87,11 @@ private:
     std::vector<std::shared_ptr<Source> > m_activeSources;
     std::vector<std::shared_ptr<Source> > m_inactiveSources;
     std::vector<std::shared_ptr<Source> > m_disabledSources;
+    std::unique_ptr<XrdCl::File> m_file_opening;
     timespec lastSourceCheck;
+    // If set to true, the next active source should be 1; 0 otherwise.
     bool nextInitialSourceToggle;
+    // The time when the next active source check should be performed.
     timespec nextActiveSourceCheck;
     bool searchMode;
 

@@ -39,7 +39,17 @@ Source::getFileHandle()
 }
 
 void
-Source::handle(RequestList &)
+Source::handle(std::shared_ptr<ClientRequest> c)
 {
-    
+    if (c.m_into)
+    {
+        // See notes in ClientRequest definition to understand this voodoo.
+        c->m_self_reference = c;
+        m_fh->Read(c.m_off, c.m_size, c.m_into, c.get());
+    }
+    else
+    {   // TODO: not implemented!
+        XRootDStatus *status = new XRootDStatus();
+        c->HandleResponse(status, nullptr);
+    }
 }

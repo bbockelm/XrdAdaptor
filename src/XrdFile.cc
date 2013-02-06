@@ -225,20 +225,8 @@ XrdFile::read (void *into, IOSize n)
     addConnection(ex);
     throw ex;
   }
-  auto file = getActiveFile();
 
-  uint32_t bytesRead;
-  XrdCl::XRootDStatus s = file->Read(m_offset, n, into, bytesRead);
-  if (!s.IsOK()) {
-    edm::Exception ex(edm::errors::FileReadError);
-    ex << "XrdClient::Read(name='" << m_name
-       << "', offset=" << m_offset << ", n=" << n
-       << ") failed with error '" << s.ToString()
-       << "' (errno=" << s.errNo << ", code=" << s.code << ")";
-    ex.addContext("Calling XrdFile::read()");
-    addConnection(ex);
-    throw ex;
-  }
+  uint32_t bytesRead = m_requestmanager->handle(into, n, m_offset);
   m_offset += bytesRead;
   return bytesRead;
 }
@@ -254,20 +242,9 @@ XrdFile::read (void *into, IOSize n, IOOffset pos)
     addConnection(ex);
     throw ex;
   }
-  auto file = getActiveFile();
 
-  uint32_t bytesRead;
-  XrdCl::XRootDStatus s = file->Read(pos, n, into, bytesRead);
-  if (!s.IsOK()) {
-    edm::Exception ex(edm::errors::FileReadError);
-    ex << "XrdClient::Read(name='" << m_name
-       << "', offset=" << m_offset << ", n=" << n
-       << ") failed with error '" << s.ToString()
-       << "' (errno=" << s.errNo << ", code=" << s.code << ")";
-    ex.addContext("Calling XrdFile::read()");
-    addConnection(ex);
-    throw ex;
-  }
+  uint32_t bytesRead = m_requestmanager->handle(into, n, pos)
+
   return bytesRead;
 }
 

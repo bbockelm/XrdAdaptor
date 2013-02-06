@@ -24,7 +24,7 @@ public:
 
     ~Source();
 
-    void handle(ClientRequest &);
+    void handle(std::shared_ptr<ClientRequest>);
 
     void handle(RequestList &);
 
