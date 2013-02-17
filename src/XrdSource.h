@@ -41,7 +41,7 @@ private:
     std::string m_id;
     std::shared_ptr<XrdCl::File> m_fh;
 
-    std::unique_ptr<QualityMetric> m_qm;
+    std::unique_ptr<QualityMetricSource> m_qm;
 
     std::vector<char> m_buffer;
 };

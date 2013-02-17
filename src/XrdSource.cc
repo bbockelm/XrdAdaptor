@@ -1,4 +1,5 @@
 
+#include <iostream>
 #include <assert.h>
 
 #include "XrdCl/XrdClFile.hh"
@@ -6,6 +7,7 @@
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
 
 #include "XrdSource.h"
+#include "XrdRequest.h"
 #include "QualityMetric.h"
 
 #define MAX_REQUEST 256*1024
@@ -41,15 +43,17 @@ Source::getFileHandle()
 void
 Source::handle(std::shared_ptr<ClientRequest> c)
 {
-    if (c.m_into)
+    std::cout << "Reading from " << ID() << ", quality " << m_qm->get() << std::endl;
+    if (c->m_into)
     {
         // See notes in ClientRequest definition to understand this voodoo.
         c->m_self_reference = c;
-        m_fh->Read(c.m_off, c.m_size, c.m_into, c.get());
+        m_qm->startWatch(c->m_qmw);
+        m_fh->Read(c->m_off, c->m_size, c->m_into, c.get());
     }
     else
     {   // TODO: not implemented!
-        XRootDStatus *status = new XRootDStatus();
+        XrdCl::XRootDStatus *status = new XrdCl::XRootDStatus();
         c->HandleResponse(status, nullptr);
     }
 }

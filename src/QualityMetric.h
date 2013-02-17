@@ -14,20 +14,24 @@ class QualityMetric;
 class QualityMetricSource;
 class QualityMetricUniqueSource;
 
-class QualityMetricWatch {
+class QualityMetricWatch : boost::noncopyable {
 friend class QualityMetricSource;
 
 public:
+    QualityMetricWatch() : m_parent1(nullptr), m_parent2(nullptr) {}
+    QualityMetricWatch(QualityMetricWatch &&);
     ~QualityMetricWatch();
 
+    void swap(QualityMetricWatch &);
+
 private:
-    QualityMetricWatch(QualityMetric parent1, QualityMetric parent2);
+    QualityMetricWatch(QualityMetric *parent1, QualityMetric *parent2);
     timespec m_start;
-    QualityMetric &m_parent1;
-    QualityMetric &m_parent2;
+    QualityMetric *m_parent1;
+    QualityMetric *m_parent2;
 };
 
-class QualityMetric {
+class QualityMetric : boost::noncopyable {
 friend class QualityMetricWatch;
 
 public:
@@ -73,7 +77,7 @@ class QualityMetricSource final : public QualityMetric {
 friend class QualityMetricUniqueSource;
 
 public:
-    QualityMetricWatch startWatch();
+    void startWatch(QualityMetricWatch &);
 
 private:
     QualityMetricSource(QualityMetricUniqueSource &parent, timespec now, int default_value);
@@ -84,7 +88,7 @@ private:
 /*
  * This quality metric tracks all accesses to a given source ID.
  */
-class QualityMetricUniqueSource final : public QualityMetric, boost::noncopyable {
+class QualityMetricUniqueSource final : public QualityMetric {
 
 friend class QualityMetricFactory;
 

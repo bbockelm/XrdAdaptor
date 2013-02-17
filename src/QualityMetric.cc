@@ -3,7 +3,7 @@
 
 using namespace XrdAdaptor;
 
-QualityMetricWatch::QualityMetricWatch(QualityMetric parent1, QualityMetric parent2)
+QualityMetricWatch::QualityMetricWatch(QualityMetric *parent1, QualityMetric *parent2)
     : m_parent1(parent1), m_parent2(parent2)
 {
     // TODO: just assuming success.
@@ -12,12 +12,42 @@ QualityMetricWatch::QualityMetricWatch(QualityMetric parent1, QualityMetric pare
 
 QualityMetricWatch::~QualityMetricWatch()
 {
-    timespec stop;
-    clock_gettime(CLOCK_MONOTONIC, &stop);
-    int ms = 1000*(stop.tv_sec - m_start.tv_sec) + 1e6*(stop.tv_nsec - m_start.tv_nsec);
-    m_parent1.finishWatch(stop, ms);
-    m_parent2.finishWatch(stop, ms);
+    if (m_parent1 && m_parent2)
+    {
+        timespec stop;
+        clock_gettime(CLOCK_MONOTONIC, &stop);
+        int ms = 1000*(stop.tv_sec - m_start.tv_sec) + (stop.tv_nsec - m_start.tv_nsec)/1e6;
+        m_parent1->finishWatch(stop, ms);
+        m_parent2->finishWatch(stop, ms);
+    }
 }
+
+QualityMetricWatch::QualityMetricWatch(QualityMetricWatch &&that)
+{
+    m_parent1 = that.m_parent1;
+    m_parent2 = that.m_parent2;
+    m_start = that.m_start;
+    that.m_parent1 = nullptr;
+    that.m_parent2 = nullptr;
+    that.m_start = {0, 0};
+}
+
+void
+QualityMetricWatch::swap(QualityMetricWatch &that)
+{
+    QualityMetric *tmp;
+    tmp = that.m_parent1;
+    that.m_parent1 = m_parent1;
+    m_parent1 = tmp;
+    tmp = that.m_parent2;
+    that.m_parent2 = m_parent2;
+    m_parent2 = tmp;
+    timespec tmp2;
+    tmp2 = that.m_start;
+    that.m_start = m_start;
+    m_start = tmp2;
+}
+
 
 QualityMetric::QualityMetric(timespec now, int default_value)
     : m_value(default_value),
@@ -117,10 +147,11 @@ QualityMetricSource::QualityMetricSource(QualityMetricUniqueSource &parent, time
       m_parent(parent)
 {}
 
-QualityMetricWatch
-QualityMetricSource::startWatch()
+void
+QualityMetricSource::startWatch(QualityMetricWatch & watch)
 {
-    return QualityMetricWatch(m_parent, *this);
+    QualityMetricWatch tmp(&m_parent, this);
+    watch.swap(tmp);
 }
 
 QualityMetricUniqueSource::QualityMetricUniqueSource(timespec now)

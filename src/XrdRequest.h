@@ -1,105 +1,59 @@
 #ifndef Utilities_XrdAdaptor_XrdRequest_h
 #define Utilities_XrdAdaptor_XrdRequest_h
 
+#include <future>
 #include <vector>
 
 #include <boost/utility.hpp>
-#include <tbb/task.h>
 #include <XrdCl/XrdClMessageUtils.hh>
 
 #include "Utilities/StorageFactory/interface/Storage.h"
+
+#include "QualityMetric.h"
 
 namespace XrdAdaptor {
 
 class Source;
 
-class ClientRequest : boost::noncopyable, public XrdCl::ResponseHandler, public tbb::task {
+class RequestManager;
+
+class ClientRequest : boost::noncopyable, public XrdCl::ResponseHandler {
 
 friend class Source;
 
 public:
 
-    ClientRequest(void *into, IOSize size, IOOffset off)
+    ClientRequest(RequestManager &manager, void *into, IOSize size, IOOffset off)
         : m_into(into),
           m_size(size),
           m_off(off),
-          m_read_info(nullptr),
           m_iolist(nullptr),
-          m_status(nullptr)
+          m_manager(manager)
     {
-        set_ref_count(1);
     }
 
-    ClientRequest(std::shared_ptr<std::vector<IOPosBuffer> > iolist)
+    ClientRequest(RequestManager &manager, std::shared_ptr<std::vector<IOPosBuffer> > iolist)
         : m_into(nullptr),
           m_size(0),
           m_off(0),
-          m_read_info(nullptr),
           m_iolist(iolist),
-          m_status(nullptr)
+          m_manager(manager)
     {
-        set_ref_count(1);
     }
 
-    /**
-     * Block until the corresponding IO operation has completed.
-     */
-    void fulfill()
-    {
-        wait_for_all();
-    }
+    virtual ~ClientRequest();
 
-    /**
-     * Return a shared pointer to the results of the IO operation.
-     * If the IO operation has not completed, then this will return
-     * a nullptr.
-     */
-    std::shared_ptr<XrdCl::XRootDStatus> getStatus(IOSize &bytesRead)
+    std::future<IOSize> get_future()
     {
-        if (m_status->IsOK())
-        {
-            if (m_into)
-            {
-                bytesRead = m_read_info->length;
-            }
-            else
-            {
-                // TODO: throw error / implement.
-            }
-        }
-        return m_status;
+        return m_promise.get_future();
     }
-
-    /**
-     * A no-op function required by the tbb::task interface.  We may
-     * fill this in later if we move the source logic into this class.
-     */
-    virtual tbb::task* execute() override {return nullptr;}
 
     /**
      * Handle the response from the Xrootd server.
      */
-    virtual void HandleResponse(XrdCl::XRootDStatus *status, XrdCl::AnyObject *response) override
-    {
-        m_self_reference.reset(nullptr);
-        m_status.reset(status);
-        if (m_status->IsOK())
-        {
-            if (m_into)
-            {
-                ChunkInfo *read_info;
-                response->Get(read_info);
-                m_read_info(read_infoi);
-                response->Set( nullptr );
-                delete response;
-            }
-            else
-            {
-                // TODO: set error and/or implement
-            }
-        }
-        decrement_ref_count();
-    }
+    virtual void HandleResponse(XrdCl::XRootDStatus *status, XrdCl::AnyObject *response) override;
+
+    IOSize getSize() const {return m_size;}
 
 private:
     void *m_into;
@@ -108,6 +62,7 @@ private:
     std::unique_ptr<XrdCl::ChunkInfo> m_read_info;
     std::shared_ptr<std::vector<IOPosBuffer> > m_iolist;
     std::shared_ptr<XrdCl::XRootDStatus> m_status;
+    RequestManager &m_manager;
 
     // Some explanation is due here.  When an IO is outstanding,
     // Xrootd takes a raw pointer to this object.  Hence we cannot
@@ -116,9 +71,12 @@ private:
     // ourselve to prevent the object from being unexpectedly deleted.
     std::shared_ptr<ClientRequest> m_self_reference;
 
+    std::promise<IOSize> m_promise;
+
+    QualityMetricWatch m_qmw;
 };
 
-class RequestList : boost::noncopyable, public XrdCl::ResponseHandler, public tbb::task {
+class RequestList : boost::noncopyable, public XrdCl::ResponseHandler {
 
 public:
 
@@ -127,7 +85,7 @@ public:
     /**
      * Block until all the requests are fulfilled.
      */
-    fulfill();
+    void fulfill();
 
     /**
      * Return a status object representing the status of all the IO requests.
@@ -135,9 +93,8 @@ public:
      * Will only be OK if all requests are successful.  Otherwise, this returns
      * the first available error.
      */
-    std::shared_ptr<XRootDStatus> getSTatus();
+    std::shared_ptr<XrdCl::XRootDStatus> getStatus();
 
-    tbb::task * execute() override {return nullptr;}
 /*
     pop_front();
     pop_back();

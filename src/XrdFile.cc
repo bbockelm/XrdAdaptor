@@ -5,6 +5,7 @@
 #include "FWCore/Utilities/interface/Likely.h"
 #include <vector>
 #include <sstream>
+#include <iostream>
 #include <assert.h>
 
 using namespace XrdAdaptor;
@@ -226,7 +227,7 @@ XrdFile::read (void *into, IOSize n)
     throw ex;
   }
 
-  uint32_t bytesRead = m_requestmanager->handle(into, n, m_offset);
+  uint32_t bytesRead = m_requestmanager->handle(into, n, m_offset).get();
   m_offset += bytesRead;
   return bytesRead;
 }
@@ -243,7 +244,7 @@ XrdFile::read (void *into, IOSize n, IOOffset pos)
     throw ex;
   }
 
-  uint32_t bytesRead = m_requestmanager->handle(into, n, pos)
+  uint32_t bytesRead = m_requestmanager->handle(into, n, pos).get();
 
   return bytesRead;
 }

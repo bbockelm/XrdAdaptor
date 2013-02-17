@@ -1,9 +1,12 @@
 #ifndef Utilities_XrdAdaptor_XrdRequestManager_h
 #define Utilities_XrdAdaptor_XrdRequestManager_h
 
+#include <mutex>
 #include <sys/stat.h>
 
 #include <boost/utility.hpp>
+
+#include "FWCore/Utilities/interface/EDMException.h"
 
 #include "XrdCl/XrdClFileSystem.hh"
 
@@ -16,7 +19,7 @@ namespace XrdCl {
 
 namespace XrdAdaptor {
 
-class RequestManager : boost::noncopyable {
+class RequestManager : boost::noncopyable, public XrdCl::ResponseHandler {
 
 public:
     RequestManager(const std::string & filename, XrdCl::OpenFlags::Flags flags, XrdCl::Access::Mode perms);
@@ -24,15 +27,27 @@ public:
     ~RequestManager();
 
     /**
-     * Synchronous interface for handling a client request.
+     * Interface for handling a client request.
      */
-    IOSize handle(void * into, IOSize, IOOffset off)
+    std::future<IOSize> handle(void * into, IOSize size, IOOffset off)
     {
-        ClientRequest req(into, off, size);
-        return handle(req);
+        std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr(new XrdAdaptor::ClientRequest(*this, into, size, off));
+        return handle(c_ptr);
     }
 
-    IOSize handle(ClientRequest &req);
+    std::future<IOSize> handle(std::shared_ptr<std::vector<IOPosBuffer> > iolist)
+    {
+        std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr(new XrdAdaptor::ClientRequest(*this, iolist));
+        return handle(c_ptr);
+    }
+
+    /**
+     * Handle a client request.
+     * NOTE: The shared_ptr interface is required.  Depending on the state of the manager,
+     * it may decide to issue multiple requests and return the first successful.  In that case,
+     * some references to the client request may still be outstanding when this function returns.
+     */
+    std::future<IOSize> handle(std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr);
 
     /**
      * Retrieve the names of the active sources
@@ -50,6 +65,17 @@ public:
      * Add the list of active connections to the exception extra info.
      */
     void addConnections(cms::Exception &);
+
+    /**
+     * Return current filename
+     */
+    const std::string & getFilename() const {return m_name;}
+
+    /**
+     * Handle the file-open response
+     */
+    virtual void HandleResponseWithHosts(XrdCl::XRootDStatus *status, XrdCl::AnyObject *response, XrdCl::HostList *hostList) override;
+
 
 private:
     /**
@@ -86,17 +112,19 @@ private:
 
     std::vector<std::shared_ptr<Source> > m_activeSources;
     std::vector<std::shared_ptr<Source> > m_inactiveSources;
-    std::vector<std::shared_ptr<Source> > m_disabledSources;
+    std::vector<std::string> m_disabledSources;
     std::unique_ptr<XrdCl::File> m_file_opening;
-    timespec lastSourceCheck;
+    timespec m_lastSourceCheck;
     // If set to true, the next active source should be 1; 0 otherwise.
-    bool nextInitialSourceToggle;
+    bool m_nextInitialSourceToggle;
     // The time when the next active source check should be performed.
-    timespec nextActiveSourceCheck;
+    timespec m_nextActiveSourceCheck;
     bool searchMode;
 
-    std::string m_name;
-    int m_flags; // TODO: this was moved to an enum in the client
+    const std::string m_name;
+    XrdCl::OpenFlags::Flags m_flags;
+    XrdCl::Access::Mode m_perms;
+    std::mutex m_source_mutex;
 };
 
 }
