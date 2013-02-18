@@ -212,7 +212,7 @@ RequestManager::prepareOpaqueString()
 void 
 XrdAdaptor::RequestManager::HandleResponseWithHosts(XrdCl::XRootDStatus *status, XrdCl::AnyObject *response, XrdCl::HostList *hostList)
 {
-    std::cout << "Open callback" << std::endl;
+    //std::cout << "Open callback" << std::endl;
     if (status->IsOK())
     {
         timespec now;
@@ -232,7 +232,41 @@ XrdAdaptor::RequestManager::HandleResponseWithHosts(XrdCl::XRootDStatus *status,
     delete hostList;
 }
 
-void splitClientRequest(const std::vector<IOPosBuffer> &iolist, std::vector<IOPosBuffer> &req1, std::vector<IOPosBuffer> &req2)
+std::future<IOSize>
+XrdAdaptor::RequestManager::handle(std::shared_ptr<std::vector<IOPosBuffer> > iolist)
+{
+    std::lock_guard<std::mutex> sentry(m_source_mutex);
+
+    if (m_activeSources.size() == 1)
+    {
+        std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr(new XrdAdaptor::ClientRequest(*this, iolist));
+        m_activeSources[0]->handle(c_ptr);
+        return c_ptr->get_future();
+    }
+
+    assert(iolist.get());
+    std::shared_ptr<std::vector<IOPosBuffer> > req1(new std::vector<IOPosBuffer>);
+    std::shared_ptr<std::vector<IOPosBuffer> > req2(new std::vector<IOPosBuffer>);
+    splitClientRequest(*iolist, *req1, *req2);
+
+    //std::cout << "Original request size " << iolist->size() << " split into requests size " << req1->size() << " and " << req2->size() << std::endl;
+
+    std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr1(new XrdAdaptor::ClientRequest(*this, req1));
+    std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr2(new XrdAdaptor::ClientRequest(*this, req2));
+
+    m_activeSources[0]->handle(c_ptr1);
+    m_activeSources[1]->handle(c_ptr2);
+    std::future<IOSize> task = std::async(std::launch::deferred,
+        [](std::future<IOSize> a, std::future<IOSize> b){
+            return a.get() + b.get();
+        },
+        c_ptr1->get_future(),
+        c_ptr2->get_future());
+    return task;
+}
+
+void
+XrdAdaptor::RequestManager::splitClientRequest(const std::vector<IOPosBuffer> &iolist, std::vector<IOPosBuffer> &req1, std::vector<IOPosBuffer> &req2)
 {
     if (iolist.size() == 0) return;
     size_t pos1 = 0, pos2 = iolist.size();
@@ -245,8 +279,9 @@ void splitClientRequest(const std::vector<IOPosBuffer> &iolist, std::vector<IOPo
         if (pos1 >= pos2) break;
         req2.push_back(iolist[pos2]);
         pos1++;
-        if (pos2 < pos1) break;
+        if (pos2 <= pos1) break;
     }
     std::reverse(req2.begin(), req2.end());
+    assert(iolist.size() == req1.size() + req2.size());
 }
 

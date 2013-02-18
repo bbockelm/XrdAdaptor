@@ -3,6 +3,7 @@
 #include "FWCore/Utilities/interface/EDMException.h"
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
 #include "FWCore/Utilities/interface/Likely.h"
+#include "FWCore/Utilities/interface/CPUTimer.h"
 #include <vector>
 #include <sstream>
 #include <iostream>
@@ -304,7 +305,13 @@ XrdFile::readv (IOPosBuffer *into, IOSize n)
     ci.set_data(buffer);
     cl->emplace_back(ci);
   }
-  return m_requestmanager->handle(cl).get();
+  edm::CPUTimer timer;
+  timer.start();
+  IOSize result = m_requestmanager->handle(cl).get();
+  timer.stop();
+  assert(result == size);
+  std::cout << "Time for readv: " << static_cast<int>(1000*timer.realTime()) << std::endl;
+  return result;
 }
 
 IOSize
