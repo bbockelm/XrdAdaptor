@@ -77,7 +77,6 @@ private:
     /**
      * Given a client request, split it into two requests lists.
      */
-    static
     void splitClientRequest(const std::vector<IOPosBuffer> &iolist, std::vector<IOPosBuffer> &req1, std::vector<IOPosBuffer> &req2);
 
     /**

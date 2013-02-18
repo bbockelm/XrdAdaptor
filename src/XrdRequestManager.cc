@@ -5,9 +5,12 @@
 
 #include "XrdCl/XrdClFile.hh"
 
+#include "FWCore/Utilities/interface/CPUTimer.h"
 #include "FWCore/Utilities/interface/EDMException.h"
 
 #include "Utilities/XrdAdaptor/src/XrdRequestManager.h"
+
+#define XRD_CL_MAX_CHUNK 512*1024
 
 using namespace XrdAdaptor;
 
@@ -237,6 +240,9 @@ XrdAdaptor::RequestManager::handle(std::shared_ptr<std::vector<IOPosBuffer> > io
 {
     std::lock_guard<std::mutex> sentry(m_source_mutex);
 
+    edm::CPUTimer timer;
+    timer.start();
+
     if (m_activeSources.size() == 1)
     {
         std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr(new XrdAdaptor::ClientRequest(*this, iolist));
@@ -249,39 +255,119 @@ XrdAdaptor::RequestManager::handle(std::shared_ptr<std::vector<IOPosBuffer> > io
     std::shared_ptr<std::vector<IOPosBuffer> > req2(new std::vector<IOPosBuffer>);
     splitClientRequest(*iolist, *req1, *req2);
 
-    //std::cout << "Original request size " << iolist->size() << " split into requests size " << req1->size() << " and " << req2->size() << std::endl;
+    std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr1, c_ptr2;
+    std::future<IOSize> future1, future2;
+    if (req1->size())
+    {
+        c_ptr1.reset(new XrdAdaptor::ClientRequest(*this, req1));
+        m_activeSources[0]->handle(c_ptr1);
+        future1 = c_ptr1->get_future();
+    }
+    if (req2->size())
+    {
+        c_ptr2.reset(new XrdAdaptor::ClientRequest(*this, req2));
+        m_activeSources[1]->handle(c_ptr2);
+        future2 = c_ptr2->get_future();
+    }
+    if (req1->size() && req2->size())
+    {
+        std::future<IOSize> task = std::async(std::launch::deferred,
+            [](std::future<IOSize> a, std::future<IOSize> b){
+                return b.get() + a.get();
+            },
+            std::move(future1),
+            std::move(future2));
+        timer.stop();
+        std::cout << "Total time to create requests " << static_cast<int>(1000*timer.realTime()) << std::endl;
+        return task;
+    }
+    if (req1->size()) return future1;
+    if (req2->size()) return future2;
 
-    std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr1(new XrdAdaptor::ClientRequest(*this, req1));
-    std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr2(new XrdAdaptor::ClientRequest(*this, req2));
+    std::promise<IOSize> p; p.set_value(0);
+    return p.get_future();
+}
 
-    m_activeSources[0]->handle(c_ptr1);
-    m_activeSources[1]->handle(c_ptr2);
-    std::future<IOSize> task = std::async(std::launch::deferred,
-        [](std::future<IOSize> a, std::future<IOSize> b){
-            return a.get() + b.get();
-        },
-        c_ptr1->get_future(),
-        c_ptr2->get_future());
-    return task;
+static void
+consumeChunkFront(size_t &front, std::vector<IOPosBuffer> &input, std::vector<IOPosBuffer> &output, IOSize chunksize)
+{
+    while ((chunksize > 0) && (front < input.size()))
+    {
+        IOPosBuffer &io = input[front];
+        if (io.size() > chunksize)
+        {
+            IOSize newsize = io.size() - chunksize;
+            IOOffset newoffset = io.offset() + chunksize;
+            void* newdata = static_cast<char*>(io.data()) + chunksize;
+            output.emplace_back(IOPosBuffer(io.offset(), io.data(), chunksize));
+            io.set_offset(newoffset);
+            io.set_data(newdata);
+            io.set_size(newsize);
+            chunksize = 0;
+        }
+        else
+        {
+            output.push_back(io);
+            chunksize -= io.size();
+            front++;
+        }
+    }
+}
+
+static void
+consumeChunkBack(size_t front, std::vector<IOPosBuffer> &input, std::vector<IOPosBuffer> &output, IOSize chunksize)
+{
+    while ((chunksize > 0) && (front < input.size()))
+    {
+        IOPosBuffer &io = input.back();
+        if (io.size() > chunksize)
+        {
+            IOSize newsize = io.size() - chunksize;
+            IOOffset newoffset = io.offset() + chunksize;
+            void* newdata = static_cast<char*>(io.data()) + chunksize;
+            output.emplace_back(IOPosBuffer(io.offset(), io.data(), chunksize));
+            io.set_offset(newoffset);
+            io.set_data(newdata);
+            io.set_size(newsize);
+            chunksize = 0;
+        }
+        else
+        {
+            output.push_back(io);
+            chunksize -= io.size();
+            input.pop_back();
+        }
+    }
 }
 
 void
 XrdAdaptor::RequestManager::splitClientRequest(const std::vector<IOPosBuffer> &iolist, std::vector<IOPosBuffer> &req1, std::vector<IOPosBuffer> &req2)
 {
     if (iolist.size() == 0) return;
-    size_t pos1 = 0, pos2 = iolist.size();
+    std::vector<IOPosBuffer> tmp_iolist(iolist.begin(), iolist.end());
     req1.reserve(iolist.size()/2+1);
     req2.reserve(iolist.size()/2+1);
-    while (true)
+    size_t front=0;
+
+    float q1 = static_cast<float>(m_activeSources[0]->getQuality());
+    float q2 = static_cast<float>(m_activeSources[1]->getQuality());
+    IOSize chunk1, chunk2;
+    chunk1 = static_cast<float>(XRD_CL_MAX_CHUNK)*(q2/(q1+q2));
+    chunk2 = static_cast<float>(XRD_CL_MAX_CHUNK)*(q1/(q1+q2));
+
+    while (tmp_iolist.size()-front > 0)
     {
-        pos2--;
-        req1.push_back(iolist[pos1]);
-        if (pos1 >= pos2) break;
-        req2.push_back(iolist[pos2]);
-        pos1++;
-        if (pos2 <= pos1) break;
+        consumeChunkFront(front, tmp_iolist, req1, chunk1);
+        consumeChunkBack(front, tmp_iolist, req2, chunk2);
     }
-    std::reverse(req2.begin(), req2.end());
-    assert(iolist.size() == req1.size() + req2.size());
+
+    IOSize size1 = 0, size2 = 0, size_orig = 0;
+    for (const auto & it : iolist) size_orig += it.size();
+    for (const auto & it : req1) size1 += it.size();
+    for (const auto & it : req2) size2 += it.size();
+
+    assert(size_orig == size1 + size2);
+
+    std::cout << "Original request size " << iolist.size() << "(" << size_orig << " bytes) split into requests size " << req1.size() << " (" << size1 << " bytes) and " << req2.size() << " (" << size2 << " bytes)" << std::endl;
 }
 
