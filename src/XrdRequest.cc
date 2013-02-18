@@ -9,23 +9,25 @@ using namespace XrdAdaptor;
 XrdAdaptor::ClientRequest::~ClientRequest() {}
 
 void 
-XrdAdaptor::ClientRequest::HandleResponse(XrdCl::XRootDStatus *status, XrdCl::AnyObject *response)
+XrdAdaptor::ClientRequest::HandleResponse(XrdCl::XRootDStatus *status, XrdCl::AnyObject *resp)
 {
+    std::unique_ptr<XrdCl::AnyObject> response(resp);
     m_status.reset(status);
     QualityMetricWatch qmw;
     m_qmw.swap(qmw);
-    if (m_status->IsOK())
+    if (m_status->IsOK() && resp)
     {
         if (m_into)
         {
             XrdCl::ChunkInfo *read_info;
             response->Get(read_info);
             m_promise.set_value(read_info->length);
-            delete response;
         }
         else
         {
-            // TODO: set error and/or implement
+            XrdCl::VectorReadInfo *read_info;
+            response->Get(read_info);
+            m_promise.set_value(read_info->GetSize());
         }
     }
     else

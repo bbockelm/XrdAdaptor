@@ -271,8 +271,6 @@ XrdFile::readv (IOBuffer *into, IOSize n)
 IOSize
 XrdFile::readv (IOPosBuffer *into, IOSize n)
 {
-  auto file = getActiveFile();
-  
   // A trivial vector read - unlikely, considering ROOT data format.
   if (unlikely(n == 0)) {
     return 0;
@@ -281,7 +279,9 @@ XrdFile::readv (IOPosBuffer *into, IOSize n)
     return read(into[0].data(), into[0].size(), into[0].offset());
   }
 
-  XrdCl::ChunkList cl; cl.reserve(n);
+  std::shared_ptr<std::vector<IOPosBuffer> >cl(new std::vector<IOPosBuffer>);
+  cl->reserve(n);
+
   IOSize size = 0;
   for (IOSize i=0; i<n; i++) {
     IOOffset offset = into[i].offset();
@@ -289,35 +289,22 @@ XrdFile::readv (IOPosBuffer *into, IOSize n)
     size += length;
     char * buffer = static_cast<char *>(into[i].data());
     while (length > XRD_CL_MAX_CHUNK) {
-      XrdCl::ChunkInfo ci;
-      ci.length = XRD_CL_MAX_CHUNK;
+      IOPosBuffer ci;
+      ci.set_size(XRD_CL_MAX_CHUNK);
       length -= XRD_CL_MAX_CHUNK;
-      ci.offset = offset;
+      ci.set_offset(offset);
       offset += XRD_CL_MAX_CHUNK;
-      ci.buffer = buffer;
+      ci.set_data(buffer);
       buffer += XRD_CL_MAX_CHUNK;
-      cl.push_back(ci);
+      cl->emplace_back(ci);
     }
-    XrdCl::ChunkInfo ci;
-    ci.length = length;
-    ci.offset = offset;
-    ci.buffer = buffer;
-    cl.push_back(ci);
+    IOPosBuffer ci;
+    ci.set_size(length);
+    ci.set_offset(offset);
+    ci.set_data(buffer);
+    cl->emplace_back(ci);
   }
-  XrdCl::VectorReadInfo *vr = nullptr;
-  XrdCl::XRootDStatus s = file->VectorRead(cl, nullptr, vr);
-  if (!s.IsOK()) {
-    edm::Exception ex(edm::errors::FileReadError);
-    ex << "XrdFile::readv(name='" << m_name
-       << "', size=" << size << ", n=" << n
-       << ") failed with error '" << s.ToString()
-       << "' (errno=" << s.errNo << ", code=" << s.code << ")";
-    ex.addContext("Calling XrdFile::readv()");
-    addConnection(ex);
-    throw ex;
-  }
-  assert(vr);
-  return vr->GetSize();
+  return m_requestmanager->handle(cl).get();
 }
 
 IOSize

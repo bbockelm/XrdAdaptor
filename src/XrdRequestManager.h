@@ -81,7 +81,7 @@ private:
     /**
      * Given a client request, split it into two requests lists.
      */
-    void splitClientRequest(const ClientRequest &, RequestList &, RequestList &);
+    void splitClientRequest(const std::vector<IOPosBuffer> &iolist, std::vector<IOPosBuffer> &req1, std::vector<IOPosBuffer> &req2);
 
     /**
      * Given a request, broadcast it to all sources.
@@ -98,11 +98,6 @@ private:
      */
     void checkSources(timespec &now, IOSize requestSize); // TODO: inline
     void checkSourcesImpl(timespec &now, IOSize requestSize);
-
-    /**
-     * Invoked when a source (besides the initial source) has finished opening.
-     */
-    void sourceOpenCallback();
 
     /**
      * Prepare an opaque string appropriate for asking a redirector to open the

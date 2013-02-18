@@ -1,6 +1,7 @@
 
 #include <assert.h>
 #include <iostream>
+#include <algorithm>
 
 #include "XrdCl/XrdClFile.hh"
 
@@ -229,5 +230,23 @@ XrdAdaptor::RequestManager::HandleResponseWithHosts(XrdCl::XRootDStatus *status,
     }
     delete status;
     delete hostList;
+}
+
+void splitClientRequest(const std::vector<IOPosBuffer> &iolist, std::vector<IOPosBuffer> &req1, std::vector<IOPosBuffer> &req2)
+{
+    if (iolist.size() == 0) return;
+    size_t pos1 = 0, pos2 = iolist.size();
+    req1.reserve(iolist.size()/2+1);
+    req2.reserve(iolist.size()/2+1);
+    while (true)
+    {
+        pos2--;
+        req1.push_back(iolist[pos1]);
+        if (pos1 >= pos2) break;
+        req2.push_back(iolist[pos2]);
+        pos1++;
+        if (pos2 < pos1) break;
+    }
+    std::reverse(req2.begin(), req2.end());
 }
 

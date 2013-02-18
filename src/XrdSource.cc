@@ -44,16 +44,23 @@ void
 Source::handle(std::shared_ptr<ClientRequest> c)
 {
     std::cout << "Reading from " << ID() << ", quality " << m_qm->get() << std::endl;
+    c->m_self_reference = c;
+    m_qm->startWatch(c->m_qmw);
     if (c->m_into)
     {
         // See notes in ClientRequest definition to understand this voodoo.
-        c->m_self_reference = c;
-        m_qm->startWatch(c->m_qmw);
         m_fh->Read(c->m_off, c->m_size, c->m_into, c.get());
     }
     else
-    {   // TODO: not implemented!
-        XrdCl::XRootDStatus *status = new XrdCl::XRootDStatus();
-        c->HandleResponse(status, nullptr);
+    {
+        XrdCl::ChunkList cl;
+        cl.reserve(c->m_iolist->size());
+        for (const auto & it : *c->m_iolist)
+        {
+            XrdCl::ChunkInfo ci(it.offset(), it.size(), it.data());
+            cl.emplace_back(ci);
+        }
+        m_fh->VectorRead(cl, nullptr, c.get());
     }
 }
+
