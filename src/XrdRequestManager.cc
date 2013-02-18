@@ -82,18 +82,23 @@ RequestManager::checkSourcesImpl(timespec &now, IOSize requestSize)
     findNewSource = true;
   else if (m_activeSources.size() > 1)
   {
-    if ((m_activeSources[0]->getQuality() > 5130) || (m_activeSources[0]->getQuality()*4 < m_activeSources[1]->getQuality()))
+    if ((m_activeSources[0]->getQuality() > 5130) ||
+        ((m_activeSources[0]->getQuality() > 260) && (m_activeSources[0]->getQuality()*4 < m_activeSources[1]->getQuality())))
     {
-      // TODO: Evict source 0 and search for new source.
+      m_inactiveSources.emplace_back(std::move(m_activeSources[0]));
+      m_activeSources.erase(m_activeSources.begin());
+      findNewSource = true;
     }
-    if ((m_activeSources[1]->getQuality() > 5130) || (m_activeSources[1]->getQuality()*4 < m_activeSources[0]->getQuality()))
+    else if ((m_activeSources[1]->getQuality() > 5130) ||
+        ((m_activeSources[1]->getQuality() > 260) && (m_activeSources[1]->getQuality()*4 < m_activeSources[0]->getQuality())))
     {
-      // TODO: Evict source 1 and search for new source.
+      m_inactiveSources.emplace_back(std::move(m_activeSources[1]));
+      m_activeSources.erase(m_activeSources.begin()+1);
+      findNewSource = true;
     }
   }
   if (findNewSource && !m_file_opening.get())
-  { // TODO: Find new source
-    // TODO: Properly construct new URL
+  {
     auto opaque = prepareOpaqueString();
     std::string new_name = m_name + opaque;
     std::cout << "Trying to open URL: " << new_name << std::endl;
@@ -229,7 +234,7 @@ XrdAdaptor::RequestManager::HandleResponseWithHosts(XrdCl::XRootDStatus *status,
     }
     else
     {   // File-open failure - wait at least 60s before next attempt.
-        m_nextActiveSourceCheck.tv_sec += 60;
+        m_nextActiveSourceCheck.tv_sec += 2*60;
     }
     delete status;
     delete hostList;
