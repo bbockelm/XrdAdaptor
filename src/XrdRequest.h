@@ -24,7 +24,8 @@ friend class Source;
 public:
 
     ClientRequest(RequestManager &manager, void *into, IOSize size, IOOffset off)
-        : m_into(into),
+        : m_failure_count(0),
+          m_into(into),
           m_size(size),
           m_off(off),
           m_iolist(nullptr),
@@ -33,7 +34,8 @@ public:
     }
 
     ClientRequest(RequestManager &manager, std::shared_ptr<std::vector<IOPosBuffer> > iolist)
-        : m_into(nullptr),
+        : m_failure_count(0),
+          m_into(nullptr),
           m_size(0),
           m_off(0),
           m_iolist(iolist),
@@ -56,12 +58,12 @@ public:
     IOSize getSize() const {return m_size;}
 
 private:
+    unsigned m_failure_count;
     void *m_into;
     IOSize m_size;
     IOOffset m_off;
-    std::unique_ptr<XrdCl::ChunkInfo> m_read_info;
     std::shared_ptr<std::vector<IOPosBuffer> > m_iolist;
-    std::shared_ptr<XrdCl::XRootDStatus> m_status;
+    std::string m_source_id;
     RequestManager &m_manager;
 
     // Some explanation is due here.  When an IO is outstanding,
@@ -76,34 +78,6 @@ private:
     QualityMetricWatch m_qmw;
 };
 
-class RequestList : boost::noncopyable, public XrdCl::ResponseHandler {
-
-public:
-
-    RequestList(const std::vector<ClientRequest> &);
-
-    /**
-     * Block until all the requests are fulfilled.
-     */
-    void fulfill();
-
-    /**
-     * Return a status object representing the status of all the IO requests.
-     * Will be null if any of the requests are not finished.
-     * Will only be OK if all requests are successful.  Otherwise, this returns
-     * the first available error.
-     */
-    std::shared_ptr<XrdCl::XRootDStatus> getStatus();
-
-/*
-    pop_front();
-    pop_back();
-    push_front();
-    push_back();
-*/
-};
-
 }
 
 #endif
-

@@ -46,6 +46,11 @@ public:
     std::future<IOSize> handle(std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr);
 
     /**
+     * Handle a failed client request.
+     */
+    void requestFailure(std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr);
+
+    /**
      * Retrieve the names of the active sources
      * (primarily meant to enable meaningful log messages).
      */

@@ -45,6 +45,7 @@ Source::handle(std::shared_ptr<ClientRequest> c)
 {
     std::cout << "Reading from " << ID() << ", quality " << m_qm->get() << std::endl;
     c->m_self_reference = c;
+    c->m_source_id = ID();
     m_qm->startWatch(c->m_qmw);
     if (c->m_into)
     {

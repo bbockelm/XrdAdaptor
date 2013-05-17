@@ -9,13 +9,15 @@ using namespace XrdAdaptor;
 XrdAdaptor::ClientRequest::~ClientRequest() {}
 
 void 
-XrdAdaptor::ClientRequest::HandleResponse(XrdCl::XRootDStatus *status, XrdCl::AnyObject *resp)
+XrdAdaptor::ClientRequest::HandleResponse(XrdCl::XRootDStatus *stat, XrdCl::AnyObject *resp)
 {
     std::unique_ptr<XrdCl::AnyObject> response(resp);
-    m_status.reset(status);
-    QualityMetricWatch qmw;
-    m_qmw.swap(qmw);
-    if (m_status->IsOK() && resp)
+    std::unique_ptr<XrdCl::XRootDStatus> status(stat);
+    {
+        QualityMetricWatch qmw;
+        m_qmw.swap(qmw);
+    }
+    if (status->IsOK() && resp)
     {
         if (m_into)
         {
@@ -32,6 +34,7 @@ XrdAdaptor::ClientRequest::HandleResponse(XrdCl::XRootDStatus *status, XrdCl::An
     }
     else
     {
+        m_failure_count++;
         // TODO: implement recovery mechanisms.
         edm::Exception ex(edm::errors::FileReadError);
         ex << "XrdRequestManager::handle(name='" << m_manager.getFilename()
