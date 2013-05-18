@@ -2,6 +2,8 @@
 #define Utilities_XrdAdaptor_XrdRequestManager_h
 
 #include <mutex>
+#include <vector>
+#include <set>
 #include <condition_variable>
 #include <sys/stat.h>
 
@@ -20,7 +22,7 @@ namespace XrdCl {
 
 namespace XrdAdaptor {
 
-class RequestManager : boost::noncopyable, public XrdCl::ResponseHandler {
+class RequestManager : boost::noncopyable {
 
 public:
     RequestManager(const std::string & filename, XrdCl::OpenFlags::Flags flags, XrdCl::Access::Mode perms);
@@ -58,6 +60,12 @@ public:
     void getActiveSourceNames(std::vector<std::string> & sources);
 
     /**
+     * Retrieve the names of the disabled sources
+     * (primarily meant to enable meaningful log messages).
+     */
+    void getDisabledSourceNames(std::vector<std::string> & sources);
+
+    /**
      * Return a pointer to an active file.  Useful for metadata
      * operations.
      */
@@ -73,13 +81,12 @@ public:
      */
     const std::string & getFilename() const {return m_name;}
 
+private:
     /**
      * Handle the file-open response
      */
-    virtual void HandleResponseWithHosts(XrdCl::XRootDStatus *status, XrdCl::AnyObject *response, XrdCl::HostList *hostList) override;
+    virtual void handleOpen(XrdCl::XRootDStatus &status, std::shared_ptr<Source>);
 
-
-private:
     /**
      * Given a client request, split it into two requests lists.
      */
@@ -110,9 +117,9 @@ private:
 
     std::vector<std::shared_ptr<Source> > m_activeSources;
     std::vector<std::shared_ptr<Source> > m_inactiveSources;
-    std::vector<std::string> m_disabledSourceStrings;
-    std::vector<std::shared_ptr<Source> > m_disabledSources;
-    std::unique_ptr<XrdCl::File> m_file_opening;
+    std::set<std::string> m_disabledSourceStrings;
+    std::set<std::shared_ptr<Source> > m_disabledSources;
+
     timespec m_lastSourceCheck;
     // If set to true, the next active source should be 1; 0 otherwise.
     bool m_nextInitialSourceToggle;
@@ -125,8 +132,34 @@ private:
     XrdCl::Access::Mode m_perms;
     std::recursive_mutex m_source_mutex;
 
-    std::mutex m_open_mutex;
-    std::condition_variable m_open_cv;
+    class OpenHandler : boost::noncopyable, public XrdCl::ResponseHandler {
+
+    public:
+        OpenHandler(RequestManager & manager);
+
+        /**
+         * Handle the file-open response
+         */
+        virtual void HandleResponseWithHosts(XrdCl::XRootDStatus *status, XrdCl::AnyObject *response, XrdCl::HostList *hostList) override;
+
+        /**
+         * Future-based version of the handler
+         * If called while a file-open is in progress, we will not start a new file-open.
+         * Instead, the callback will be fired for the ongoing open.
+         */
+        std::shared_future<std::shared_ptr<Source> > open();
+
+    private:
+        RequestManager & m_manager;
+        std::shared_future<std::shared_ptr<Source> > m_shared_future;
+        std::promise<std::shared_ptr<Source> > m_promise;
+        // When this is not null, there is a file-open in process
+        // Can only be touched when m_mutex is held.
+        std::unique_ptr<XrdCl::File> m_file;
+        std::recursive_mutex m_mutex;
+    };
+
+    OpenHandler m_open_handler;
 };
 
 }

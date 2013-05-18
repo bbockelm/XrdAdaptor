@@ -318,7 +318,6 @@ XrdFile::readv (IOPosBuffer *into, IOSize n)
   catch (edm::Exception& ex)
   {
     ex.addContext("Calling XrdFile::readv()");
-    addConnection(ex);
     throw;
   }
   timer.stop();

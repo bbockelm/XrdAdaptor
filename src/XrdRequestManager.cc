@@ -23,12 +23,11 @@ int timeDiffMS(timespec &a, timespec &b)
 }
 
 RequestManager::RequestManager(const std::string &filename, XrdCl::OpenFlags::Flags flags, XrdCl::Access::Mode perms)
-    : m_file_opening(nullptr),
-      m_nextInitialSourceToggle(false),
+    : m_nextInitialSourceToggle(false),
       m_name(filename),
       m_flags(flags),
       m_perms(perms),
-      m_open_mutex()
+      m_open_handler(*this)
 {
 
   std::unique_ptr<XrdCl::File> file(new XrdCl::File());
@@ -39,7 +38,7 @@ RequestManager::RequestManager(const std::string &filename, XrdCl::OpenFlags::Fl
     ex << "XrdCl::File::Open(name='" << filename
        << "', flags=0x" << std::hex << flags
        << ", permissions=0" << std::oct << perms << std::dec
-       << ") => error '" << status.ToString()
+       << ") => error '" << status.ToStr()
        << "' (errno=" << status.errNo << ", code=" << status.code << ")";
     ex.addContext("Calling XrdFile::open()");
     addConnections(ex);
@@ -109,27 +108,10 @@ RequestManager::checkSourcesImpl(timespec &now, IOSize requestSize)
       findNewSource = true;
     }
   }
-  if (findNewSource && !m_file_opening.get())
+  if (findNewSource)
   {
-    auto opaque = prepareOpaqueString();
-    std::string new_name = m_name + opaque;
-    edm::LogVerbatim("XrdAdaptorInternal") << "Trying to open URL: " << new_name;
-    m_file_opening.reset(new XrdCl::File());
-    XrdCl::XRootDStatus status;
-    if (!(status = m_file_opening->Open(new_name, m_flags, m_perms, this)).IsOK())
-    {
-      edm::Exception ex(edm::errors::FileOpenError);
-      ex << "XrdCl::File::Open(name='" << new_name
-         << "', flags=0x" << std::hex << m_flags
-         << ", permissions=0" << std::oct << m_perms << std::dec
-         << ") => error '" << status.ToString()
-         << "' (errno=" << status.errNo << ", code=" << status.code << ")";
-      ex.addContext("Calling XrdFile::open()");
-      addConnections(ex);
-      throw ex;
-    }
+    m_open_handler.open();
     m_lastSourceCheck = now;
-
   }
 
   now.tv_sec += 5;
@@ -154,6 +136,16 @@ RequestManager::getActiveSourceNames(std::vector<std::string> & sources)
 }
 
 void
+RequestManager::getDisabledSourceNames(std::vector<std::string> & sources)
+{
+  std::lock_guard<std::recursive_mutex> sentry(m_source_mutex);
+  sources.reserve(m_disabledSourceStrings.size());
+  for (auto const& source : m_disabledSourceStrings) {
+    sources.push_back(source);
+  }
+}
+
+void
 RequestManager::addConnections(cms::Exception &ex)
 {
   std::vector<std::string> sources;
@@ -161,6 +153,12 @@ RequestManager::addConnections(cms::Exception &ex)
   for (auto const& source : sources)
   {
     ex.addAdditionalInfo("Active source: " + source);
+  }
+  sources.clear();
+  getDisabledSourceNames(sources);
+  for (auto const& source : sources)
+  {
+    ex.addAdditionalInfo("Disabled source: " + source);
   }
 }
 
@@ -200,8 +198,7 @@ RequestManager::handle(std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr)
 std::string
 RequestManager::prepareOpaqueString()
 {
-    // TODO: with source read lock.
-    {
+    std::lock_guard<std::recursive_mutex> sentry(m_source_mutex);
     std::stringstream ss;
     ss << "?tried=";
     size_t count = 0;
@@ -225,20 +222,15 @@ RequestManager::prepareOpaqueString()
         std::string tmp_str = ss.str();
         return tmp_str.substr(0, tmp_str.size()-1);
     }
-    return ss.str();
-    }
+    return "";
 }
 
 void 
-XrdAdaptor::RequestManager::HandleResponseWithHosts(XrdCl::XRootDStatus *status, XrdCl::AnyObject *response, XrdCl::HostList *hostList)
+XrdAdaptor::RequestManager::handleOpen(XrdCl::XRootDStatus &status, std::shared_ptr<Source> source)
 {
-    //std::cout << "Open callback" << std::endl;
     std::lock_guard<std::recursive_mutex> sentry(m_source_mutex);
-    if (status->IsOK())
+    if (status.IsOK())
     {
-        timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        std::shared_ptr<Source> source(new Source(now, std::move(m_file_opening)));
         edm::LogVerbatim("XrdAdaptorInternal") << "Successfully opened new source: " << source->ID() << std::endl;
         { 
             m_activeSources.push_back(source);
@@ -246,14 +238,9 @@ XrdAdaptor::RequestManager::HandleResponseWithHosts(XrdCl::XRootDStatus *status,
     }
     else
     {   // File-open failure - wait at least 60s before next attempt.
+        edm::LogVerbatim("XrdAdaptorInternal") << "Got failure when trying to open a new source" << std::endl;
         m_nextActiveSourceCheck.tv_sec += 2*60;
     }
-    delete status;
-    delete hostList;
-
-    // TODO: needs to be wrapped in a scope guard.
-    std::lock_guard<std::mutex> lk(m_open_mutex);
-    m_open_cv.notify_all();
 }
 
 std::future<IOSize>
@@ -318,8 +305,8 @@ RequestManager::requestFailure(std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr)
     // Note that we do not delete the Source itself.  That is because this
     // function may be called from within XrdCl::ResponseHandler::HandleResponseWithHosts
     // In such a case, if you close a file in the handler, it will deadlock
-    m_disabledSourceStrings.push_back(source_ptr->ID());
-    m_disabledSources.push_back(source_ptr);
+    m_disabledSourceStrings.insert(source_ptr->ID());
+    m_disabledSources.insert(source_ptr);
 
     if ((m_activeSources.size() > 0) && (m_activeSources[0].get() == source_ptr.get()))
     {
@@ -329,34 +316,48 @@ RequestManager::requestFailure(std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr)
     {
         m_activeSources.erase(m_activeSources.begin()+1);
     }
+    std::shared_ptr<Source> new_source;
+    if (m_activeSources.size() == 0)
     {
-        std::unique_lock<std::mutex> lk(m_open_mutex);
-        if (m_activeSources.size() == 0)
+        std::shared_future<std::shared_ptr<Source> > future = m_open_handler.open();
+        timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        m_lastSourceCheck = now;
+        // Note we only wait for 60 seconds here.  This is because we've already failed
+        // once and the likelihood the program has some inconsistent state is decent.
+        // We'd much rather fail hard than deadlock!
+        sentry.unlock();
+        std::future_status status = future.wait_for(std::chrono::seconds(60));
+        if (status == std::future_status::timeout)
         {
-            sentry.unlock();
-            checkSourcesNow(c_ptr->getSize());
-            // Note we only wait for 5 seconds here.  This is because we've already failed
-            // once and the likelihood the program has some inconsistent state is decent.
-            // We'd much rather fail hard than deadlock!
-            // TODO: a condition var is not appropriate here.  It should actually be a promise.
-            // That way, we could do proper error / exception propagation.
-            m_open_cv.wait_for(lk, std::chrono::seconds(5));
-            sentry.lock();
+            edm::Exception ex(edm::errors::FileOpenError);
+            ex << "XrdCl::File::Open(name='" << m_name
+               << "', flags=0x" << std::hex << m_flags
+               << ", permissions=0" << std::oct << m_perms << std::dec
+               << ", old source=" << source_ptr->ID()
+               << ") => timeout when waiting for file open";
+            ex.addContext("In XrdAdaptor::RequestManager::requestFailure()");
+            addConnections(ex);
         }
-    }
-    if (m_activeSources.size() > 0)
-    {
-        m_activeSources[0]->handle(c_ptr);
+        else
+        {
+            try
+            {
+                new_source = future.get();
+            }
+            catch (edm::Exception &ex)
+            {
+                ex.addContext("Handling XrdAdaptor::RequestManager::requestFailure()");
+                throw;
+            }
+        }
+        sentry.lock();
     }
     else
     {
-        edm::Exception ex(edm::errors::FileOpenError);
-        ex << "XrdReqeustManager::requestFailure(name='" << m_name
-           << ", old_source=" << source_ptr->ID() << ") => error in finding new source";
-        ex.addContext("Calling XrdFile::requestFailure()");
-        addConnections(ex);
-        throw ex;
+        new_source = m_activeSources[0];
     }
+    new_source->handle(c_ptr);
 }
 
 static void
@@ -440,5 +441,75 @@ XrdAdaptor::RequestManager::splitClientRequest(const std::vector<IOPosBuffer> &i
     assert(size_orig == size1 + size2);
 
     edm::LogVerbatim("XrdAdaptorInternal") << "Original request size " << iolist.size() << " (" << size_orig << " bytes) split into requests size " << req1.size() << " (" << size1 << " bytes) and " << req2.size() << " (" << size2 << " bytes)" << std::endl;
+}
+
+XrdAdaptor::RequestManager::OpenHandler::OpenHandler(RequestManager & manager)
+  : m_manager(manager)
+{
+}
+
+void
+XrdAdaptor::RequestManager::OpenHandler::HandleResponseWithHosts(XrdCl::XRootDStatus *status, XrdCl::AnyObject *response, XrdCl::HostList *hostList)
+{
+    std::lock_guard<std::recursive_mutex> sentry(m_mutex);
+    if (status->IsOK())
+    {
+        timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        std::shared_ptr<Source> source(new Source(now, std::move(m_file)));
+        m_promise.set_value(source);
+        m_manager.handleOpen(*status, source);
+    }
+    else
+    {
+        m_file.reset();
+        std::shared_ptr<Source> emptySource;
+        edm::Exception ex(edm::errors::FileOpenError);
+        ex << "XrdCl::File::Open(name='" << m_manager.m_name
+           << "', flags=0x" << std::hex << m_manager.m_flags
+           << ", permissions=0" << std::oct << m_manager.m_perms << std::dec
+           << ") => error '" << status->ToStr()
+           << "' (errno=" << status->errNo << ", code=" << status->code << ")";
+        ex.addContext("In XrdAdaptor::RequestManager::OpenHandler::HandleResponseWithHosts()");
+        m_manager.addConnections(ex);
+
+        m_promise.set_exception(std::make_exception_ptr(ex));
+        m_manager.handleOpen(*status, emptySource);
+    }
+    delete status;
+    delete hostList;
+}
+
+std::shared_future<std::shared_ptr<Source> >
+XrdAdaptor::RequestManager::OpenHandler::open()
+{
+    std::lock_guard<std::recursive_mutex> sentry(m_mutex);
+
+    if (m_file.get())
+    {
+        return m_shared_future;
+    }
+    std::promise<std::shared_ptr<Source> > new_promise;
+    m_promise.swap(new_promise);
+    m_shared_future = m_promise.get_future().share();
+
+    auto opaque = m_manager.prepareOpaqueString();
+    std::string new_name = m_manager.m_name + opaque;
+    edm::LogVerbatim("XrdAdaptorInternal") << "Trying to open URL: " << new_name;
+    m_file.reset(new XrdCl::File());
+    XrdCl::XRootDStatus status;
+    if (!(status = m_file->Open(new_name, m_manager.m_flags, m_manager.m_perms, this)).IsOK())
+    {
+      edm::Exception ex(edm::errors::FileOpenError);
+      ex << "XrdCl::File::Open(name='" << new_name
+         << "', flags=0x" << std::hex << m_manager.m_flags
+         << ", permissions=0" << std::oct << m_manager.m_perms << std::dec
+         << ") => error '" << status.ToStr()
+         << "' (errno=" << status.errNo << ", code=" << status.code << ")";
+      ex.addContext("Calling XrdAdaptor::RequestManager::OpenHandler::open()");
+      m_manager.addConnections(ex);
+      throw ex;
+    }
+    return m_shared_future;
 }
 

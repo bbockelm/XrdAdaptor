@@ -15,7 +15,7 @@
 using namespace XrdAdaptor;
 
 Source::Source(timespec now, std::unique_ptr<XrdCl::File> fh)
-    : m_id(fh->GetDataServer()),
+    : m_id(fh.get() ? fh->GetDataServer() : "(unknown)"),
       m_fh(std::move(fh)),
       m_qm(QualityMetricFactory::get(now, m_id))
 {

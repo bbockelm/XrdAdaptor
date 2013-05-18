@@ -59,8 +59,7 @@ XrdAdaptor::ClientRequest::HandleResponse(XrdCl::XRootDStatus *stat, XrdCl::AnyO
         }
         catch (edm::Exception& ex)
         {
-            ex.addContext("Calling XrdRequestManager::handle()");
-            m_manager.addConnections(ex);
+            ex.addContext("In XrdAdaptor::ClientRequest::HandleResponse() case for failure");
             //m_promise.set_exception(std::make_exception_ptr(ex));
             m_promise.set_exception(std::current_exception());
         }
