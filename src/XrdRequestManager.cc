@@ -65,22 +65,15 @@ RequestManager::~RequestManager()
 void
 RequestManager::checkSources(timespec &now, IOSize requestSize)
 {
-  //std::cout << "Time since last check " << timeDiffMS(now, m_lastSourceCheck) << "; last check " << m_lastSourceCheck.tv_sec << "; now " <<now.tv_sec << std::endl;  
+  edm::LogVerbatim("XrdAdaptorInternal") << "Time since last check "
+    << timeDiffMS(now, m_lastSourceCheck) << "; last check "
+    << m_lastSourceCheck.tv_sec << "; now " <<now.tv_sec
+    << "; next check " << m_nextActiveSourceCheck.tv_sec << std::endl;  
   if (timeDiffMS(now, m_lastSourceCheck) > 1000 && timeDiffMS(now, m_nextActiveSourceCheck) > 0)
   {   
     m_lastSourceCheck = now;
     checkSourcesImpl(now, requestSize);
   }
-}
-
-void
-RequestManager::checkSourcesNow(IOSize requestSize)
-{
-  timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  m_lastSourceCheck = ts;
-  m_nextActiveSourceCheck = ts;
-  checkSourcesImpl(ts, requestSize);
 }
 
 void
@@ -93,19 +86,26 @@ RequestManager::checkSourcesImpl(timespec &now, IOSize requestSize)
     findNewSource = true;
   else if (m_activeSources.size() > 1)
   {
+    edm::LogVerbatim("XrdAdaptorInternal") << "Source 0 quality " << m_activeSources[0]->getQuality() << ", source 1 quality " << m_activeSources[1]->getQuality() << std::endl;
     if ((m_activeSources[0]->getQuality() > 5130) ||
         ((m_activeSources[0]->getQuality() > 260) && (m_activeSources[0]->getQuality()*4 < m_activeSources[1]->getQuality())))
     {
-      m_inactiveSources.emplace_back(std::move(m_activeSources[0]));
-      m_activeSources.erase(m_activeSources.begin());
-      findNewSource = true;
+        edm::LogWarning("XrdAdaptorInternal") << "Removing "
+          << m_activeSources[0]->ID() << " from active sources due to poor quality ("
+          << m_activeSources[0]->getQuality() << ")" << std::endl;
+        m_inactiveSources.emplace_back(std::move(m_activeSources[0]));
+        m_activeSources.erase(m_activeSources.begin());
+        findNewSource = true;
     }
     else if ((m_activeSources[1]->getQuality() > 5130) ||
         ((m_activeSources[1]->getQuality() > 260) && (m_activeSources[1]->getQuality()*4 < m_activeSources[0]->getQuality())))
     {
-      m_inactiveSources.emplace_back(std::move(m_activeSources[1]));
-      m_activeSources.erase(m_activeSources.begin()+1);
-      findNewSource = true;
+        edm::LogWarning("XrdAdaptorInternal") << "Removing "
+          << m_activeSources[1]->ID() << " from active sources due to poor quality ("
+          << m_activeSources[1]->getQuality() << ")" << std::endl;
+        m_inactiveSources.emplace_back(std::move(m_activeSources[1]));
+        m_activeSources.erase(m_activeSources.begin()+1);
+        findNewSource = true;
     }
   }
   if (findNewSource)
@@ -232,14 +232,20 @@ XrdAdaptor::RequestManager::handleOpen(XrdCl::XRootDStatus &status, std::shared_
     if (status.IsOK())
     {
         edm::LogVerbatim("XrdAdaptorInternal") << "Successfully opened new source: " << source->ID() << std::endl;
-        { 
+
+        if (m_activeSources.size() < 2)
+        {
             m_activeSources.push_back(source);
+        }
+        else
+        {
+            m_inactiveSources.push_back(source);
         }
     }
     else
-    {   // File-open failure - wait at least 60s before next attempt.
+    {   // File-open failure - wait at least 120s before next attempt.
         edm::LogVerbatim("XrdAdaptorInternal") << "Got failure when trying to open a new source" << std::endl;
-        m_nextActiveSourceCheck.tv_sec += 2*60;
+        m_nextActiveSourceCheck.tv_sec += 2*60 - 5;
     }
 }
 
@@ -248,12 +254,17 @@ XrdAdaptor::RequestManager::handle(std::shared_ptr<std::vector<IOPosBuffer> > io
 {
     std::lock_guard<std::recursive_mutex> sentry(m_source_mutex);
 
+    timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
     edm::CPUTimer timer;
     timer.start();
 
+    assert(m_activeSources.size());
     if (m_activeSources.size() == 1)
     {
         std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr(new XrdAdaptor::ClientRequest(*this, iolist));
+        checkSources(now, c_ptr->getSize());
         m_activeSources[0]->handle(c_ptr);
         return c_ptr->get_future();
     }
@@ -262,6 +273,15 @@ XrdAdaptor::RequestManager::handle(std::shared_ptr<std::vector<IOPosBuffer> > io
     std::shared_ptr<std::vector<IOPosBuffer> > req1(new std::vector<IOPosBuffer>);
     std::shared_ptr<std::vector<IOPosBuffer> > req2(new std::vector<IOPosBuffer>);
     splitClientRequest(*iolist, *req1, *req2);
+
+    checkSources(now, req1->size() + req2->size());
+    // CheckSources may have removed a source
+    if (m_activeSources.size() == 1)
+    {
+        std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr(new XrdAdaptor::ClientRequest(*this, iolist));
+        m_activeSources[0]->handle(c_ptr);
+        return c_ptr->get_future();
+    }
 
     std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr1, c_ptr2;
     std::future<IOSize> future1, future2;

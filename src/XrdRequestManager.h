@@ -106,7 +106,6 @@ private:
      * second.
      */
     void checkSources(timespec &now, IOSize requestSize); // TODO: inline
-    void checkSourcesNow(IOSize requestSize);
     void checkSourcesImpl(timespec &now, IOSize requestSize);
 
     /**
