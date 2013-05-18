@@ -2,6 +2,7 @@
 #define Utilities_XrdAdaptor_XrdRequestManager_h
 
 #include <mutex>
+#include <condition_variable>
 #include <sys/stat.h>
 
 #include <boost/utility.hpp>
@@ -98,6 +99,7 @@ private:
      * second.
      */
     void checkSources(timespec &now, IOSize requestSize); // TODO: inline
+    void checkSourcesNow(IOSize requestSize);
     void checkSourcesImpl(timespec &now, IOSize requestSize);
 
     /**
@@ -108,7 +110,8 @@ private:
 
     std::vector<std::shared_ptr<Source> > m_activeSources;
     std::vector<std::shared_ptr<Source> > m_inactiveSources;
-    std::vector<std::string> m_disabledSources;
+    std::vector<std::string> m_disabledSourceStrings;
+    std::vector<std::shared_ptr<Source> > m_disabledSources;
     std::unique_ptr<XrdCl::File> m_file_opening;
     timespec m_lastSourceCheck;
     // If set to true, the next active source should be 1; 0 otherwise.
@@ -120,7 +123,10 @@ private:
     const std::string m_name;
     XrdCl::OpenFlags::Flags m_flags;
     XrdCl::Access::Mode m_perms;
-    std::mutex m_source_mutex;
+    std::recursive_mutex m_source_mutex;
+
+    std::mutex m_open_mutex;
+    std::condition_variable m_open_cv;
 };
 
 }

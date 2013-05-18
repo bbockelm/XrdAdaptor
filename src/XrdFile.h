@@ -7,6 +7,7 @@
 # include "XrdCl/XrdClFile.hh"
 # include <string>
 # include <memory>
+# include <atomic>
 
 namespace XrdAdaptor {
 class RequestManager;
@@ -68,6 +69,7 @@ private:
   IOOffset                       m_size;
   bool			         m_close;
   std::string		         m_name;
+  std::atomic<unsigned int>      m_op_count;
 
 };
 

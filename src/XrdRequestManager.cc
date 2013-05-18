@@ -7,6 +7,7 @@
 
 #include "FWCore/Utilities/interface/CPUTimer.h"
 #include "FWCore/Utilities/interface/EDMException.h"
+#include "FWCore/MessageLogger/interface/MessageLogger.h"
 
 #include "Utilities/XrdAdaptor/src/XrdRequestManager.h"
 
@@ -26,7 +27,8 @@ RequestManager::RequestManager(const std::string &filename, XrdCl::OpenFlags::Fl
       m_nextInitialSourceToggle(false),
       m_name(filename),
       m_flags(flags),
-      m_perms(perms)
+      m_perms(perms),
+      m_open_mutex()
 {
 
   std::unique_ptr<XrdCl::File> file(new XrdCl::File());
@@ -49,7 +51,7 @@ RequestManager::RequestManager(const std::string &filename, XrdCl::OpenFlags::Fl
 
   std::shared_ptr<Source> source(new Source(ts, std::move(file)));
   {
-    std::lock_guard<std::mutex> sentry(m_source_mutex);
+    std::lock_guard<std::recursive_mutex> sentry(m_source_mutex);
     m_activeSources.push_back(source);
   }
 
@@ -73,12 +75,22 @@ RequestManager::checkSources(timespec &now, IOSize requestSize)
 }
 
 void
+RequestManager::checkSourcesNow(IOSize requestSize)
+{
+  timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  m_lastSourceCheck = ts;
+  m_nextActiveSourceCheck = ts;
+  checkSourcesImpl(ts, requestSize);
+}
+
+void
 RequestManager::checkSourcesImpl(timespec &now, IOSize requestSize)
 {
-  std::lock_guard<std::mutex> sentry(m_source_mutex);
+  std::lock_guard<std::recursive_mutex> sentry(m_source_mutex);
 
   bool findNewSource = false;
-  if (m_activeSources.size() == 1)
+  if (m_activeSources.size() <= 1)
     findNewSource = true;
   else if (m_activeSources.size() > 1)
   {
@@ -101,7 +113,7 @@ RequestManager::checkSourcesImpl(timespec &now, IOSize requestSize)
   {
     auto opaque = prepareOpaqueString();
     std::string new_name = m_name + opaque;
-    std::cout << "Trying to open URL: " << new_name << std::endl;
+    edm::LogVerbatim("XrdAdaptorInternal") << "Trying to open URL: " << new_name;
     m_file_opening.reset(new XrdCl::File());
     XrdCl::XRootDStatus status;
     if (!(status = m_file_opening->Open(new_name, m_flags, m_perms, this)).IsOK())
@@ -127,14 +139,14 @@ RequestManager::checkSourcesImpl(timespec &now, IOSize requestSize)
 std::shared_ptr<XrdCl::File>
 RequestManager::getActiveFile()
 {
-  std::lock_guard<std::mutex> sentry(m_source_mutex);
+  std::lock_guard<std::recursive_mutex> sentry(m_source_mutex);
   return m_activeSources[0]->getFileHandle();
 }
 
 void
 RequestManager::getActiveSourceNames(std::vector<std::string> & sources)
 {
-  std::lock_guard<std::mutex> sentry(m_source_mutex);
+  std::lock_guard<std::recursive_mutex> sentry(m_source_mutex);
   sources.reserve(m_activeSources.size());
   for (auto const& source : m_activeSources) {
     sources.push_back(source->ID());
@@ -162,7 +174,7 @@ RequestManager::handle(std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr)
 
   std::shared_ptr<Source> source = nullptr;
   {
-    std::lock_guard<std::mutex> sentry(m_source_mutex);
+    std::lock_guard<std::recursive_mutex> sentry(m_source_mutex);
     if (m_activeSources.size() == 2)
     {
         if (m_nextInitialSourceToggle)
@@ -203,7 +215,7 @@ RequestManager::prepareOpaqueString()
         count++;
         ss << it->ID().substr(0, it->ID().find(":")) << ",";
     }
-    for ( const auto & it : m_disabledSources )
+    for ( const auto & it : m_disabledSourceStrings )
     {
         count++;
         ss << it.substr(0, it.find(":")) << ",";
@@ -221,14 +233,14 @@ void
 XrdAdaptor::RequestManager::HandleResponseWithHosts(XrdCl::XRootDStatus *status, XrdCl::AnyObject *response, XrdCl::HostList *hostList)
 {
     //std::cout << "Open callback" << std::endl;
+    std::lock_guard<std::recursive_mutex> sentry(m_source_mutex);
     if (status->IsOK())
     {
         timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         std::shared_ptr<Source> source(new Source(now, std::move(m_file_opening)));
-        std::cout << "successfully opened new source: " << source->ID() << std::endl;
+        edm::LogVerbatim("XrdAdaptorInternal") << "Successfully opened new source: " << source->ID() << std::endl;
         { 
-            std::lock_guard<std::mutex> sentry(m_source_mutex);
             m_activeSources.push_back(source);
         }
     }
@@ -238,12 +250,16 @@ XrdAdaptor::RequestManager::HandleResponseWithHosts(XrdCl::XRootDStatus *status,
     }
     delete status;
     delete hostList;
+
+    // TODO: needs to be wrapped in a scope guard.
+    std::lock_guard<std::mutex> lk(m_open_mutex);
+    m_open_cv.notify_all();
 }
 
 std::future<IOSize>
 XrdAdaptor::RequestManager::handle(std::shared_ptr<std::vector<IOPosBuffer> > iolist)
 {
-    std::lock_guard<std::mutex> sentry(m_source_mutex);
+    std::lock_guard<std::recursive_mutex> sentry(m_source_mutex);
 
     edm::CPUTimer timer;
     timer.start();
@@ -283,7 +299,7 @@ XrdAdaptor::RequestManager::handle(std::shared_ptr<std::vector<IOPosBuffer> > io
             std::move(future1),
             std::move(future2));
         timer.stop();
-        std::cout << "Total time to create requests " << static_cast<int>(1000*timer.realTime()) << std::endl;
+        //edm::LogVerbatim("XrdAdaptorInternal") << "Total time to create requests " << static_cast<int>(1000*timer.realTime()) << std::endl;
         return task;
     }
     if (req1->size()) return future1;
@@ -291,6 +307,56 @@ XrdAdaptor::RequestManager::handle(std::shared_ptr<std::vector<IOPosBuffer> > io
 
     std::promise<IOSize> p; p.set_value(0);
     return p.get_future();
+}
+
+void
+RequestManager::requestFailure(std::shared_ptr<XrdAdaptor::ClientRequest> c_ptr)
+{
+    std::unique_lock<std::recursive_mutex> sentry(m_source_mutex);
+    std::shared_ptr<Source> source_ptr = c_ptr->getCurrentSource();
+
+    // Note that we do not delete the Source itself.  That is because this
+    // function may be called from within XrdCl::ResponseHandler::HandleResponseWithHosts
+    // In such a case, if you close a file in the handler, it will deadlock
+    m_disabledSourceStrings.push_back(source_ptr->ID());
+    m_disabledSources.push_back(source_ptr);
+
+    if ((m_activeSources.size() > 0) && (m_activeSources[0].get() == source_ptr.get()))
+    {
+        m_activeSources.erase(m_activeSources.begin());
+    }
+    else if ((m_activeSources.size() > 1) && (m_activeSources[1].get() == source_ptr.get()))
+    {
+        m_activeSources.erase(m_activeSources.begin()+1);
+    }
+    {
+        std::unique_lock<std::mutex> lk(m_open_mutex);
+        if (m_activeSources.size() == 0)
+        {
+            sentry.unlock();
+            checkSourcesNow(c_ptr->getSize());
+            // Note we only wait for 5 seconds here.  This is because we've already failed
+            // once and the likelihood the program has some inconsistent state is decent.
+            // We'd much rather fail hard than deadlock!
+            // TODO: a condition var is not appropriate here.  It should actually be a promise.
+            // That way, we could do proper error / exception propagation.
+            m_open_cv.wait_for(lk, std::chrono::seconds(5));
+            sentry.lock();
+        }
+    }
+    if (m_activeSources.size() > 0)
+    {
+        m_activeSources[0]->handle(c_ptr);
+    }
+    else
+    {
+        edm::Exception ex(edm::errors::FileOpenError);
+        ex << "XrdReqeustManager::requestFailure(name='" << m_name
+           << ", old_source=" << source_ptr->ID() << ") => error in finding new source";
+        ex.addContext("Calling XrdFile::requestFailure()");
+        addConnections(ex);
+        throw ex;
+    }
 }
 
 static void
@@ -373,6 +439,6 @@ XrdAdaptor::RequestManager::splitClientRequest(const std::vector<IOPosBuffer> &i
 
     assert(size_orig == size1 + size2);
 
-    std::cout << "Original request size " << iolist.size() << "(" << size_orig << " bytes) split into requests size " << req1.size() << " (" << size1 << " bytes) and " << req2.size() << " (" << size2 << " bytes)" << std::endl;
+    edm::LogVerbatim("XrdAdaptorInternal") << "Original request size " << iolist.size() << " (" << size_orig << " bytes) split into requests size " << req1.size() << " (" << size1 << " bytes) and " << req2.size() << " (" << size2 << " bytes)" << std::endl;
 }
 

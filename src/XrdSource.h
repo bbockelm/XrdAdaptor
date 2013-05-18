@@ -17,7 +17,7 @@ namespace XrdAdaptor {
 class RequestList;
 class ClientRequest;
 
-class Source : boost::noncopyable {
+class Source : public std::enable_shared_from_this<Source>, boost::noncopyable {
 
 public:
     Source(timespec now, std::unique_ptr<XrdCl::File> fileHandle);

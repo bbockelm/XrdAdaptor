@@ -20,7 +20,8 @@ XrdFile::XrdFile (void)
   :  m_offset (0),
     m_size(-1),
     m_close (false),
-    m_name()
+    m_name(),
+    m_op_count(0)
 {
 }
 
@@ -30,7 +31,8 @@ XrdFile::XrdFile (const char *name,
   : m_offset (0),
     m_size(-1),
     m_close (false),
-    m_name()
+    m_name(),
+    m_op_count(0)
 {
   open (name, flags, perms);
 }
@@ -41,7 +43,8 @@ XrdFile::XrdFile (const std::string &name,
   : m_offset (0),
     m_size(-1),
     m_close (false),
-    m_name()
+    m_name(),
+    m_op_count(0)
 {
   open (name.c_str (), flags, perms);
 }
@@ -307,10 +310,20 @@ XrdFile::readv (IOPosBuffer *into, IOSize n)
   }
   edm::CPUTimer timer;
   timer.start();
-  IOSize result = m_requestmanager->handle(cl).get();
+  IOSize result;
+  try
+  {
+    result = m_requestmanager->handle(cl).get();
+  }
+  catch (edm::Exception& ex)
+  {
+    ex.addContext("Calling XrdFile::readv()");
+    addConnection(ex);
+    throw;
+  }
   timer.stop();
   assert(result == size);
-  std::cout << "Time for readv: " << static_cast<int>(1000*timer.realTime()) << std::endl;
+  edm::LogVerbatim("XrdAdaptorInternal") << "[" << m_op_count.fetch_add(1) << "] Time for readv: " << static_cast<int>(1000*timer.realTime()) << std::endl;
   return result;
 }
 

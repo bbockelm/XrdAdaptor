@@ -41,6 +41,7 @@ public:
           m_iolist(iolist),
           m_manager(manager)
     {
+        // TODO: calculate size here.
     }
 
     virtual ~ClientRequest();
@@ -57,20 +58,26 @@ public:
 
     IOSize getSize() const {return m_size;}
 
+    /**
+     * Returns a pointer to the current source; may be nullptr
+     * if there is no outstanding IO
+     */
+    std::shared_ptr<Source> getCurrentSource() const {return m_source;}
+
 private:
     unsigned m_failure_count;
     void *m_into;
     IOSize m_size;
     IOOffset m_off;
     std::shared_ptr<std::vector<IOPosBuffer> > m_iolist;
-    std::string m_source_id;
     RequestManager &m_manager;
+    std::shared_ptr<Source> m_source;
 
     // Some explanation is due here.  When an IO is outstanding,
     // Xrootd takes a raw pointer to this object.  Hence we cannot
     // allow it to go out of scope until some indeterminate time in the
     // future.  So, while the IO is outstanding, we take a reference to
-    // ourselve to prevent the object from being unexpectedly deleted.
+    // ourself to prevent the object from being unexpectedly deleted.
     std::shared_ptr<ClientRequest> m_self_reference;
 
     std::promise<IOSize> m_promise;
