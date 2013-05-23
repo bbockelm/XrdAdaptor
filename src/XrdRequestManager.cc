@@ -13,11 +13,24 @@
 
 #define XRD_CL_MAX_CHUNK 512*1024
 
+#define XRD_ADAPTOR_SHORT_OPEN_DELAY 5
+
+#ifdef XRD_FAKE_OPEN_PROBE
+#define XRD_ADAPTOR_OPEN_PROBE_PERCENT 100
+#define XRD_ADAPTOR_LONG_OPEN_DELAY 20
+// This is the minimal difference in quality required to swap an active and inactive source
+#define XRD_ADAPTOR_SOURCE_QUALITY_FUDGE 0
+#else
+#define XRD_ADAPTOR_OPEN_PROBE_PERCENT 10
+#define XRD_ADAPTOR_LONG_OPEN_DELAY 2*60
+#define XRD_ADAPTOR_SOURCE_QUALITY_FUDGE 100
+#endif
+
 using namespace XrdAdaptor;
 
-int timeDiffMS(timespec &a, timespec &b)
+long long timeDiffMS(const timespec &a, const timespec &b)
 {
-  int diff = (a.tv_sec - b.tv_sec) * 1000;
+  long long diff = (a.tv_sec - b.tv_sec) * 1000;
   diff += (a.tv_nsec - b.tv_nsec) / 1e6;
   return diff;
 }
@@ -27,9 +40,9 @@ RequestManager::RequestManager(const std::string &filename, XrdCl::OpenFlags::Fl
       m_name(filename),
       m_flags(flags),
       m_perms(perms),
+      m_distribution(0,100),
       m_open_handler(*this)
 {
-
   std::unique_ptr<XrdCl::File> file(new XrdCl::File());
   XrdCl::XRootDStatus status;
   if (! (status = file->Open(filename, flags, perms)).IsOK())
@@ -55,7 +68,7 @@ RequestManager::RequestManager(const std::string &filename, XrdCl::OpenFlags::Fl
   }
 
   m_lastSourceCheck = ts;
-  ts.tv_sec += 5;
+  ts.tv_sec += XRD_ADAPTOR_SHORT_OPEN_DELAY;
   m_nextActiveSourceCheck = ts;
 }
 
@@ -71,7 +84,6 @@ RequestManager::checkSources(timespec &now, IOSize requestSize)
     << "; next check " << m_nextActiveSourceCheck.tv_sec << std::endl;  
   if (timeDiffMS(now, m_lastSourceCheck) > 1000 && timeDiffMS(now, m_nextActiveSourceCheck) > 0)
   {   
-    m_lastSourceCheck = now;
     checkSourcesImpl(now, requestSize);
   }
 }
@@ -88,24 +100,72 @@ RequestManager::checkSourcesImpl(timespec &now, IOSize requestSize)
   {
     edm::LogVerbatim("XrdAdaptorInternal") << "Source 0 quality " << m_activeSources[0]->getQuality() << ", source 1 quality " << m_activeSources[1]->getQuality() << std::endl;
     if ((m_activeSources[0]->getQuality() > 5130) ||
-        ((m_activeSources[0]->getQuality() > 260) && (m_activeSources[0]->getQuality()*4 < m_activeSources[1]->getQuality())))
+        ((m_activeSources[0]->getQuality() > 260) && (m_activeSources[1]->getQuality()*4 < m_activeSources[0]->getQuality())))
     {
         edm::LogWarning("XrdAdaptorInternal") << "Removing "
           << m_activeSources[0]->ID() << " from active sources due to poor quality ("
           << m_activeSources[0]->getQuality() << ")" << std::endl;
-        m_inactiveSources.emplace_back(std::move(m_activeSources[0]));
+        if (m_activeSources[0]->getLastDowngrade().tv_sec != 0) findNewSource = true;
+        m_activeSources[0]->setLastDowngrade(now);
+        m_inactiveSources.emplace_back(m_activeSources[0]);
         m_activeSources.erase(m_activeSources.begin());
-        findNewSource = true;
     }
     else if ((m_activeSources[1]->getQuality() > 5130) ||
-        ((m_activeSources[1]->getQuality() > 260) && (m_activeSources[1]->getQuality()*4 < m_activeSources[0]->getQuality())))
+        ((m_activeSources[1]->getQuality() > 260) && (m_activeSources[0]->getQuality()*4 < m_activeSources[1]->getQuality())))
     {
         edm::LogWarning("XrdAdaptorInternal") << "Removing "
           << m_activeSources[1]->ID() << " from active sources due to poor quality ("
           << m_activeSources[1]->getQuality() << ")" << std::endl;
-        m_inactiveSources.emplace_back(std::move(m_activeSources[1]));
+        if (m_activeSources[1]->getLastDowngrade().tv_sec != 0) findNewSource = true;
+        m_activeSources[1]->setLastDowngrade(now);
+        m_inactiveSources.emplace_back(m_activeSources[1]);
         m_activeSources.erase(m_activeSources.begin()+1);
-        findNewSource = true;
+    }
+    // NOTE: We could probably replace the copy with a better sort function at the cost of mental capacity.
+    std::vector<std::shared_ptr<Source> > eligibleInactiveSources; eligibleInactiveSources.reserve(m_inactiveSources.size());
+    for (const auto & source : m_inactiveSources) if (timeDiffMS(now, source->getLastDowngrade()) > (XRD_ADAPTOR_SHORT_OPEN_DELAY-1)*1000) eligibleInactiveSources.push_back(source);
+    //for (const auto & source : m_inactiveSources) eligibleInactiveSources.push_back(source);
+    std::vector<std::shared_ptr<Source> >::iterator bestInactiveSource = std::min_element(eligibleInactiveSources.begin(), eligibleInactiveSources.end(),
+        [](const std::shared_ptr<Source> &s1, const std::shared_ptr<Source> &s2) {return s1->getQuality() < s2->getQuality();});
+    std::vector<std::shared_ptr<Source> >::iterator worstActiveSource = std::max_element(m_activeSources.begin(), m_activeSources.end(),
+        [](const std::shared_ptr<Source> &s1, const std::shared_ptr<Source> &s2) {return s1->getQuality() < s2->getQuality();});
+    if (bestInactiveSource != eligibleInactiveSources.end() && bestInactiveSource->get())
+    {
+        edm::LogVerbatim("XrdAdaptorInternal") << "Best inactive source: " <<(*bestInactiveSource)->ID()
+            << ", quality " << (*bestInactiveSource)->getQuality();
+    }
+    edm::LogVerbatim("XrdAdaptorInternal") << "Worst active source: " <<(*worstActiveSource)->ID() 
+        << ", quality " << (*worstActiveSource)->getQuality();
+    if ((bestInactiveSource != eligibleInactiveSources.end()) && m_activeSources.size() == 1)
+    {
+        m_activeSources.push_back(*bestInactiveSource);
+        for (auto it = m_inactiveSources.begin(); it != m_inactiveSources.end(); it++) if (it->get() == bestInactiveSource->get()) {m_inactiveSources.erase(it); break;}
+    }
+    else while ((bestInactiveSource != eligibleInactiveSources.end()) && (*worstActiveSource)->getQuality() > (*bestInactiveSource)->getQuality()+XRD_ADAPTOR_SOURCE_QUALITY_FUDGE)
+    {
+        edm::LogVerbatim("XrdAdaptorInternal") << "Removing " << (*worstActiveSource)->ID()
+            << " from active sources due to quality (" << (*worstActiveSource)->getQuality()
+            << ") and promoting " << (*bestInactiveSource)->ID() << " (quality: "
+            << (*bestInactiveSource)->getQuality() << ")" << std::endl;
+        (*worstActiveSource)->setLastDowngrade(now);
+        for (auto it = m_inactiveSources.begin(); it != m_inactiveSources.end(); it++) if (it->get() == bestInactiveSource->get()) {m_inactiveSources.erase(it); break;}
+        m_inactiveSources.emplace_back(std::move(*worstActiveSource));
+        m_activeSources.erase(worstActiveSource);
+        m_activeSources.emplace_back(std::move(*bestInactiveSource));
+        eligibleInactiveSources.clear();
+        for (const auto & source : m_inactiveSources) if (timeDiffMS(now, source->getLastDowngrade()) > (XRD_ADAPTOR_LONG_OPEN_DELAY-1)*1000) eligibleInactiveSources.push_back(source);
+        bestInactiveSource = std::min_element(eligibleInactiveSources.begin(), eligibleInactiveSources.end(),
+            [](const std::shared_ptr<Source> &s1, const std::shared_ptr<Source> &s2) {return s1->getQuality() < s2->getQuality();});
+        worstActiveSource = std::max_element(m_activeSources.begin(), m_activeSources.end(),
+            [](const std::shared_ptr<Source> &s1, const std::shared_ptr<Source> &s2) {return s1->getQuality() < s2->getQuality();});
+    }
+    if (!findNewSource && (timeDiffMS(now, m_lastSourceCheck) > 1000*XRD_ADAPTOR_LONG_OPEN_DELAY))
+    {
+        float r = m_distribution(m_generator);
+        if (r < XRD_ADAPTOR_OPEN_PROBE_PERCENT)
+        {
+            findNewSource = true;
+        }
     }
   }
   if (findNewSource)
@@ -114,7 +174,7 @@ RequestManager::checkSourcesImpl(timespec &now, IOSize requestSize)
     m_lastSourceCheck = now;
   }
 
-  now.tv_sec += 5;
+  now.tv_sec += XRD_ADAPTOR_SHORT_OPEN_DELAY;
   m_nextActiveSourceCheck = now;
 }
 
@@ -245,7 +305,7 @@ XrdAdaptor::RequestManager::handleOpen(XrdCl::XRootDStatus &status, std::shared_
     else
     {   // File-open failure - wait at least 120s before next attempt.
         edm::LogVerbatim("XrdAdaptorInternal") << "Got failure when trying to open a new source" << std::endl;
-        m_nextActiveSourceCheck.tv_sec += 2*60 - 5;
+        m_nextActiveSourceCheck.tv_sec += XRD_ADAPTOR_LONG_OPEN_DELAY - XRD_ADAPTOR_SHORT_OPEN_DELAY;
     }
 }
 

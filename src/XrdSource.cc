@@ -17,7 +17,8 @@
 #define MAX_REQUEST 256*1024
 
 #ifdef XRD_FAKE_SLOW
-#define XRD_DELAY 5140
+//#define XRD_DELAY 5140
+#define XRD_DELAY 1000
 #define XRD_SLOW_RATE 2
 int g_delayCount = 0;
 #else
@@ -27,12 +28,13 @@ int g_delayCount = 0;
 using namespace XrdAdaptor;
 
 Source::Source(timespec now, std::unique_ptr<XrdCl::File> fh)
-    : m_id(fh.get() ? fh->GetDataServer() : "(unknown)"),
+    : m_lastDowngrade({0, 0}),
+      m_id(fh.get() ? fh->GetDataServer() : "(unknown)"),
       m_fh(std::move(fh)),
       m_qm(QualityMetricFactory::get(now, m_id))
 #ifdef XRD_FAKE_SLOW
-    //, m_slow(++g_delayCount % XRD_SLOW_RATE == 0)
-    , m_slow(++g_delayCount >= XRD_SLOW_RATE)
+    , m_slow(++g_delayCount % XRD_SLOW_RATE == 0)
+    //, m_slow(++g_delayCount >= XRD_SLOW_RATE)
     //, m_slow(true)
 #endif
 {

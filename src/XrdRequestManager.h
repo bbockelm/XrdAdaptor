@@ -5,6 +5,7 @@
 #include <vector>
 #include <set>
 #include <condition_variable>
+#include <random>
 #include <sys/stat.h>
 
 #include <boost/utility.hpp>
@@ -130,6 +131,9 @@ private:
     XrdCl::OpenFlags::Flags m_flags;
     XrdCl::Access::Mode m_perms;
     std::recursive_mutex m_source_mutex;
+
+    std::mt19937 m_generator;
+    std::uniform_real_distribution<float> m_distribution;
 
     class OpenHandler : boost::noncopyable, public XrdCl::ResponseHandler {
 
